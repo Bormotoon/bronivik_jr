@@ -50,12 +50,14 @@ func createTables(db *sql.DB) error {
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id INTEGER NOT NULL,
             user_name TEXT NOT NULL,
+            user_nickname TEXT,
             phone TEXT NOT NULL,
             item_id INTEGER NOT NULL,
             item_name TEXT NOT NULL,
             date DATETIME NOT NULL,
             status TEXT NOT NULL DEFAULT 'pending',
-            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
         )`,
 		`CREATE INDEX IF NOT EXISTS idx_bookings_date ON bookings(date)`,
 		`CREATE INDEX IF NOT EXISTS idx_bookings_status ON bookings(status)`,
@@ -126,19 +128,21 @@ func (db *DB) GetBookedCount(ctx context.Context, itemID int64, date time.Time) 
 // CreateBooking создает новое бронирование
 func (db *DB) CreateBooking(ctx context.Context, booking *models.Booking) error {
 	query := `
-        INSERT INTO bookings (user_id, user_name, phone, item_id, item_name, date, status, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO bookings (user_id, user_name, user_nickname, phone, item_id, item_name, date, status, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `
 
 	result, err := db.ExecContext(ctx, query,
 		booking.UserID,
 		booking.UserName,
+		booking.UserNickname,
 		booking.Phone,
 		booking.ItemID,
 		booking.ItemName,
 		booking.Date,
 		booking.Status,
 		booking.CreatedAt,
+		time.Now(), // updated_at
 	)
 
 	if err != nil {
@@ -157,7 +161,7 @@ func (db *DB) CreateBooking(ctx context.Context, booking *models.Booking) error 
 // GetBooking возвращает бронирование по ID
 func (db *DB) GetBooking(ctx context.Context, id int64) (*models.Booking, error) {
 	query := `
-        SELECT id, user_id, user_name, phone, item_id, item_name, date, status, created_at
+        SELECT id, user_id, user_name, user_nickname, phone, item_id, item_name, date, status, created_at, updated_at
         FROM bookings WHERE id = ?
     `
 
@@ -166,12 +170,14 @@ func (db *DB) GetBooking(ctx context.Context, id int64) (*models.Booking, error)
 		&booking.ID,
 		&booking.UserID,
 		&booking.UserName,
+		&booking.UserNickname,
 		&booking.Phone,
 		&booking.ItemID,
 		&booking.ItemName,
 		&booking.Date,
 		&booking.Status,
 		&booking.CreatedAt,
+		&booking.UpdatedAt,
 	)
 
 	if err != nil {
@@ -251,13 +257,65 @@ func (db *DB) GetAvailabilityForPeriod(ctx context.Context, itemID int64, startD
 
 		availability = append(availability, models.Availability{
 			Date:      currentDate,
-			ItemID:    int(itemID),
-			Booked:    int(int64(booked)),
-			Available: int(item.TotalQuantity - int64(booked)),
+			ItemID:    itemID,
+			Booked:    int64(booked),
+			Available: item.TotalQuantity - int64(booked),
 		})
 	}
 
 	return availability, nil
+}
+
+// UpdateBookingItem обновляет данные о бронировании товара
+func (db *DB) UpdateBookingItem(ctx context.Context, id int64, itemID int64, itemName string) error {
+	query := `UPDATE bookings SET item_id = ?, item_name = ?, updated_at = ? WHERE id = ?`
+
+	_, err := db.ExecContext(ctx, query, itemID, itemName, time.Now(), id)
+	return err
+}
+
+// GetUserBookings возвращает список всех бронирований пользователя
+func (db *DB) GetUserBookings(ctx context.Context, userID int64) ([]models.Booking, error) {
+	query := `
+        SELECT id, user_id, user_name, user_nickname, phone, item_id, item_name, date, status, created_at, updated_at
+        FROM bookings 
+        WHERE user_id = ?
+        ORDER BY created_at DESC
+    `
+
+	rows, err := db.QueryContext(ctx, query, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var bookings []models.Booking
+	for rows.Next() {
+		var booking models.Booking
+		err := rows.Scan(
+			&booking.ID,
+			&booking.UserID,
+			&booking.UserName,
+			&booking.UserNickname,
+			&booking.Phone,
+			&booking.ItemID,
+			&booking.ItemName,
+			&booking.Date,
+			&booking.Status,
+			&booking.CreatedAt,
+			&booking.UpdatedAt,
+		)
+		if err != nil {
+			return nil, err
+		}
+		bookings = append(bookings, booking)
+	}
+
+	if err = rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return bookings, nil
 }
 
 func (db *DB) Close() error {

@@ -10,7 +10,7 @@ type UserState struct {
 
 type Availability struct {
 	Date      time.Time `json:"date"`
-	ItemID    int       `json:"item_id"`
-	Booked    int       `json:"booked"`
-	Available int       `json:"available"`
+	ItemID    int64     `json:"item_id"`
+	Booked    int64     `json:"booked"`
+	Available int64     `json:"available"`
 }

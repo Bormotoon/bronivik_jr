@@ -3,6 +3,7 @@ package bot
 import (
 	"log"
 	"strings"
+	"time"
 
 	"bronivik/internal/config"
 	"bronivik/internal/database"
@@ -39,6 +40,7 @@ const (
 	StateSelectDate   = "select_date"
 	StateViewSchedule = "view_schedule"
 	StatePersonalData = "personal_data"
+	StateEnterName    = "enter_name"
 	StatePhoneNumber  = "phone_number"
 	StateConfirmation = "confirmation"
 )
@@ -75,18 +77,22 @@ func (b *Bot) handleMessage(update tgbotapi.Update) {
 	text := update.Message.Text
 
 	// Проверка на менеджера
-	if b.isManager(userID) {
-		if strings.HasPrefix(text, "/export") {
-			b.handleExport(update)
-			return
-		}
+	if b.isManager(update.Message.From.ID) {
+		b.handleManagerCommand(update)
 	}
 
 	state := b.getUserState(userID)
 
 	switch {
-	case text == "/start":
+	case text == "/start" || strings.ToLower(text) == "сброс" || strings.ToLower(text) == "reset":
+		b.clearUserState(update.Message.From.ID)
 		b.handleMainMenu(update)
+
+	case text == "📞 Контакты менеджеров":
+		b.showManagerContacts(update)
+
+	case text == "📊 Мои заявки":
+		b.showUserBookings(update)
 
 	case text == "💼 Доступные позиции":
 		b.showAvailableItems(update)
@@ -103,24 +109,53 @@ func (b *Bot) handleMessage(update tgbotapi.Update) {
 	case text == "🗓 Выбрать дату":
 		b.requestSpecificDate(update)
 
-	case text == "⬅️ Назад":
-		b.handleMainMenu(update)
+	case text == "👨‍💼 Все заявки":
+		b.showManagerBookings(update)
 
-	case update.Message.Contact != nil:
-		b.handleContactReceived(update)
+	case text == "➕ Создать заявку (Менеджер)":
+		b.startManagerBooking(update)
+
+	case text == "⬅️ Назад":
+		if state != nil {
+			// Возвращаемся к предыдущему шагу в зависимости от текущего состояния
+			switch state.CurrentStep {
+			case StateEnterName:
+				b.handlePersonalData(update, state.TempData["item_id"].(int64), state.TempData["date"].(time.Time))
+			case StatePhoneNumber:
+				b.handleNameRequest(update)
+			case StateConfirmation:
+				b.handlePhoneRequest(update)
+			default:
+				b.handleMainMenu(update)
+			}
+		} else {
+			b.handleMainMenu(update)
+		}
 
 	case state != nil && state.CurrentStep == StateSelectItem && strings.HasPrefix(text, "🏢 "):
 		itemName := strings.TrimPrefix(text, "🏢 ")
 		b.handleItemSelection(update, itemName)
 
 	case state != nil && state.CurrentStep == StatePersonalData && text == "✅ Даю согласие":
-		b.handlePhoneRequest(update)
+		b.handleNameRequest(update)
+
+	case state != nil && state.CurrentStep == StateEnterName:
+		if text == "👤 Использовать имя из Telegram" {
+			// Используем имя из Telegram
+			state.TempData["user_name"] = update.Message.From.FirstName + " " + update.Message.From.LastName
+			b.setUserState(update.Message.From.ID, StatePhoneNumber, state.TempData)
+			b.handlePhoneRequest(update)
+		} else {
+			// Сохраняем введенное имя
+			state.TempData["user_name"] = text
+			b.setUserState(update.Message.From.ID, StatePhoneNumber, state.TempData)
+			b.handlePhoneRequest(update)
+		}
 
 	case state != nil && state.CurrentStep == StatePhoneNumber:
 		if update.Message.Contact != nil {
-			b.handlePhoneReceived(update, update.Message.Contact.PhoneNumber)
+			b.handleContactReceived(update)
 		} else {
-			// Позволяем ввести номер вручную
 			b.handlePhoneReceived(update, text)
 		}
 
@@ -128,6 +163,7 @@ func (b *Bot) handleMessage(update tgbotapi.Update) {
 		b.finalizeBooking(update)
 
 	case text == "❌ Отмена":
+		b.clearUserState(update.Message.From.ID)
 		b.handleMainMenu(update)
 
 	default:

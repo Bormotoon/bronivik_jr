@@ -11,6 +11,10 @@ telegram:
 managers:
   - 1295070216
 
+managers_contacts:
+  - "Иван: +7-900-123-45-67 @gerruda"
+  - "Мария: +7-900-765-43-21"
+
 blacklist:
   - 111111111
   - 222222222

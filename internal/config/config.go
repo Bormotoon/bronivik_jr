@@ -9,17 +9,18 @@ import (
 )
 
 type Config struct {
-	App        AppConfig        `yaml:"app"`
-	Telegram   TelegramConfig   `yaml:"telegram"`
-	Database   DatabaseConfig   `yaml:"database"`
-	Redis      RedisConfig      `yaml:"redis"`
-	Backup     BackupConfig     `yaml:"backup"`
-	Monitoring MonitoringConfig `yaml:"monitoring"`
-	Logging    LoggingConfig    `yaml:"logging"`
-	Managers   []int64          `yaml:"managers"`
-	Blacklist  []int64          `yaml:"blacklist"`
-	Items      []models.Item    `yaml:"items"` // Добавляем эту строку
-	Exports    ExportConfig     `yaml:"exports"`
+	App              AppConfig        `yaml:"app"`
+	Telegram         TelegramConfig   `yaml:"telegram"`
+	Database         DatabaseConfig   `yaml:"database"`
+	Redis            RedisConfig      `yaml:"redis"`
+	Backup           BackupConfig     `yaml:"backup"`
+	Monitoring       MonitoringConfig `yaml:"monitoring"`
+	Logging          LoggingConfig    `yaml:"logging"`
+	Managers         []int64          `yaml:"managers"`
+	ManagersContacts []string         `yaml:"managers_contacts"`
+	Blacklist        []int64          `yaml:"blacklist"`
+	Items            []models.Item    `yaml:"items"`
+	Exports          ExportConfig     `yaml:"exports"`
 }
 
 type ExportConfig struct {
