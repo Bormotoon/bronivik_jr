@@ -1,0 +1,265 @@
+package database
+
+import (
+	"context"
+	"database/sql"
+	"fmt"
+	"log"
+	"os"
+	"path/filepath"
+	"time"
+
+	"bronivik/internal/models"
+	_ "github.com/mattn/go-sqlite3"
+)
+
+type DB struct {
+	*sql.DB
+	items map[int64]models.Item
+}
+
+func NewDB(path string) (*DB, error) {
+	// Создаем директорию для БД, если её нет
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return nil, fmt.Errorf("failed to create database directory: %v", err)
+	}
+
+	db, err := sql.Open("sqlite3", path)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open database: %v", err)
+	}
+
+	// Проверяем соединение
+	if err := db.Ping(); err != nil {
+		return nil, fmt.Errorf("failed to connect to database: %v", err)
+	}
+
+	// Создаем таблицы
+	if err := createTables(db); err != nil {
+		return nil, fmt.Errorf("failed to create tables: %v", err)
+	}
+
+	log.Printf("База данных инициализирована: %s", path)
+	return &DB{db, make(map[int64]models.Item)}, nil
+}
+
+func createTables(db *sql.DB) error {
+	queries := []string{
+		`CREATE TABLE IF NOT EXISTS bookings (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            user_name TEXT NOT NULL,
+            phone TEXT NOT NULL,
+            item_id INTEGER NOT NULL,
+            item_name TEXT NOT NULL,
+            date DATETIME NOT NULL,
+            status TEXT NOT NULL DEFAULT 'pending',
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )`,
+		`CREATE INDEX IF NOT EXISTS idx_bookings_date ON bookings(date)`,
+		`CREATE INDEX IF NOT EXISTS idx_bookings_status ON bookings(status)`,
+		`CREATE INDEX IF NOT EXISTS idx_bookings_item_id ON bookings(item_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_bookings_user_id ON bookings(user_id)`,
+	}
+
+	for _, query := range queries {
+		if _, err := db.Exec(query); err != nil {
+			return fmt.Errorf("error executing query %s: %v", query, err)
+		}
+	}
+	return nil
+}
+
+// SetItems устанавливает информацию о позициях для проверки доступности
+func (db *DB) SetItems(items []models.Item) {
+	db.items = make(map[int64]models.Item)
+	for _, item := range items {
+		db.items[item.ID] = item
+	}
+}
+
+// CheckAvailability проверяет доступность позиции на указанную дату
+func (db *DB) CheckAvailability(ctx context.Context, itemID int64, date time.Time) (bool, error) {
+	dateStr := date.Format("2006-01-02")
+
+	query := `
+        SELECT COUNT(*) 
+        FROM bookings 
+        WHERE item_id = ? 
+        AND date(date) = date(?)
+        AND status IN ('pending', 'confirmed')
+    `
+
+	var bookedCount int
+	err := db.QueryRowContext(ctx, query, itemID, dateStr).Scan(&bookedCount)
+	if err != nil {
+		return false, err
+	}
+
+	// Получаем общее количество из кэша items
+	item, exists := db.items[itemID]
+	if !exists {
+		return false, fmt.Errorf("item with ID %d not found", itemID)
+	}
+
+	return bookedCount < int(item.TotalQuantity), nil
+}
+
+// GetBookedCount возвращает количество забронированных единиц на дату
+func (db *DB) GetBookedCount(ctx context.Context, itemID int64, date time.Time) (int, error) {
+	dateStr := date.Format("2006-01-02")
+
+	query := `
+        SELECT COUNT(*) 
+        FROM bookings 
+        WHERE item_id = ? 
+        AND date(date) = date(?)
+        AND status IN ('pending', 'confirmed')
+    `
+
+	var count int
+	err := db.QueryRowContext(ctx, query, itemID, dateStr).Scan(&count)
+	return count, err
+}
+
+// CreateBooking создает новое бронирование
+func (db *DB) CreateBooking(ctx context.Context, booking *models.Booking) error {
+	query := `
+        INSERT INTO bookings (user_id, user_name, phone, item_id, item_name, date, status, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `
+
+	result, err := db.ExecContext(ctx, query,
+		booking.UserID,
+		booking.UserName,
+		booking.Phone,
+		booking.ItemID,
+		booking.ItemName,
+		booking.Date,
+		booking.Status,
+		booking.CreatedAt,
+	)
+
+	if err != nil {
+		return err
+	}
+
+	id, err := result.LastInsertId()
+	if err != nil {
+		return err
+	}
+
+	booking.ID = id
+	return nil
+}
+
+// GetBooking возвращает бронирование по ID
+func (db *DB) GetBooking(ctx context.Context, id int64) (*models.Booking, error) {
+	query := `
+        SELECT id, user_id, user_name, phone, item_id, item_name, date, status, created_at
+        FROM bookings WHERE id = ?
+    `
+
+	var booking models.Booking
+	err := db.QueryRowContext(ctx, query, id).Scan(
+		&booking.ID,
+		&booking.UserID,
+		&booking.UserName,
+		&booking.Phone,
+		&booking.ItemID,
+		&booking.ItemName,
+		&booking.Date,
+		&booking.Status,
+		&booking.CreatedAt,
+	)
+
+	if err != nil {
+		return nil, err
+	}
+
+	return &booking, nil
+}
+
+// UpdateBookingStatus обновляет статус бронирования
+func (db *DB) UpdateBookingStatus(ctx context.Context, id int64, status string) error {
+	query := `UPDATE bookings SET status = ? WHERE id = ?`
+
+	_, err := db.ExecContext(ctx, query, status, id)
+	return err
+}
+
+// GetBookingsByDateRange возвращает бронирования за период
+func (db *DB) GetBookingsByDateRange(ctx context.Context, startDate, endDate time.Time) ([]models.Booking, error) {
+	query := `
+        SELECT id, user_id, user_name, phone, item_id, item_name, date, status, created_at
+        FROM bookings 
+        WHERE date(date) BETWEEN date(?) AND date(?)
+        ORDER BY date, created_at
+    `
+
+	rows, err := db.QueryContext(ctx, query,
+		startDate.Format("2006-01-02"),
+		endDate.Format("2006-01-02"))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var bookings []models.Booking
+	for rows.Next() {
+		var booking models.Booking
+		err := rows.Scan(
+			&booking.ID,
+			&booking.UserID,
+			&booking.UserName,
+			&booking.Phone,
+			&booking.ItemID,
+			&booking.ItemName,
+			&booking.Date,
+			&booking.Status,
+			&booking.CreatedAt,
+		)
+		if err != nil {
+			return nil, err
+		}
+		bookings = append(bookings, booking)
+	}
+
+	if err = rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return bookings, nil
+}
+
+// GetAvailabilityForPeriod возвращает доступность на период
+func (db *DB) GetAvailabilityForPeriod(ctx context.Context, itemID int64, startDate time.Time, days int) ([]models.Availability, error) {
+	var availability []models.Availability
+
+	item, exists := db.items[itemID]
+	if !exists {
+		return nil, fmt.Errorf("item with ID %d not found", itemID)
+	}
+
+	for i := 0; i < days; i++ {
+		currentDate := startDate.AddDate(0, 0, i)
+		booked, err := db.GetBookedCount(ctx, itemID, currentDate)
+		if err != nil {
+			return nil, err
+		}
+
+		availability = append(availability, models.Availability{
+			Date:      currentDate,
+			ItemID:    int(itemID),
+			Booked:    int(int64(booked)),
+			Available: int(item.TotalQuantity - int64(booked)),
+		})
+	}
+
+	return availability, nil
+}
+
+func (db *DB) Close() error {
+	return db.DB.Close()
+}

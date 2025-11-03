@@ -1,0 +1,13 @@
+items:
+  - id: 1
+    name: "Аппарат Крысота-Адын"
+    description: "Вместимость до 20 человек"
+    total_quantity: 2
+  - id: 2
+    name: "Аппарат Красотка-дывыа"
+    description: "Вместимость до 6 человек"
+    total_quantity: 5
+  - id: 3
+    name: "Аппарат Гидра"
+    description: "Индивидуальное рабочее место"
+    total_quantity: 15
