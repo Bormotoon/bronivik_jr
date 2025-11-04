@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -13,9 +15,9 @@ import (
 )
 
 // handleManagerCommand обработка команд менеджера
-func (b *Bot) handleManagerCommand(update tgbotapi.Update) {
+func (b *Bot) handleManagerCommand(update tgbotapi.Update) bool {
 	if !b.isManager(update.Message.From.ID) {
-		return
+		return false
 	}
 
 	text := update.Message.Text
@@ -25,6 +27,12 @@ func (b *Bot) handleManagerCommand(update tgbotapi.Update) {
 		b.startManagerBooking(update)
 	case text == "/manager_bookings":
 		b.showManagerBookings(update)
+	case text == "/manager_availability":
+		b.showManagerAvailability(update)
+	case text == "/manager_export_week":
+		b.handleExportWeek(update)
+	case strings.HasPrefix(text, "/manager_export_range"):
+		b.handleExportRange(update)
 	case strings.HasPrefix(text, "/manager_booking_"):
 		// Просмотр конкретной заявки
 		parts := strings.Split(text, "_")
@@ -35,6 +43,8 @@ func (b *Bot) handleManagerCommand(update tgbotapi.Update) {
 			}
 		}
 	}
+
+	return false
 }
 
 // startManagerBooking начало создания заявки менеджером
@@ -102,6 +112,12 @@ func (b *Bot) showManagerBookings(update tgbotapi.Update) {
 
 // showManagerBookingDetail показывает детали заявки менеджеру
 func (b *Bot) showManagerBookingDetail(update tgbotapi.Update, bookingID int64) {
+	// ПРОВЕРКА НА NIL - чтобы избежать паники
+	if update.Message == nil {
+		log.Printf("Error: update.Message is nil in showManagerBookingDetail")
+		return
+	}
+
 	booking, err := b.db.GetBooking(context.Background(), bookingID)
 	if err != nil {
 		b.sendMessage(update.Message.Chat.ID, "Заявка не найдена")
@@ -238,7 +254,7 @@ func (b *Bot) startChangeItem(booking *models.Booking, managerChatID int64) {
 	b.bot.Send(msg)
 }
 
-// handleChangeItem обработка выбора нового аппарата
+// handleChangeItem обработка выбора нового аппарата С ПРОВЕРКОЙ ДОСТУПНОСТИ
 func (b *Bot) handleChangeItem(update tgbotapi.Update) {
 	callback := update.CallbackQuery
 	if callback == nil {
@@ -266,8 +282,23 @@ func (b *Bot) handleChangeItem(update tgbotapi.Update) {
 		return
 	}
 
+	// ПРОВЕРЯЕМ ДОСТУПНОСТЬ нового аппарата на дату заявки
+	booking, available, err := b.db.GetBookingWithAvailability(context.Background(), bookingID, selectedItem.ID)
+	if err != nil {
+		log.Printf("Error checking availability: %v", err)
+		b.sendMessage(callback.Message.Chat.ID, "Ошибка при проверке доступности")
+		return
+	}
+
+	if !available {
+		b.sendMessage(callback.Message.Chat.ID,
+			fmt.Sprintf("❌ Аппарат '%s' недоступен на дату %s. Выберите другой аппарат.",
+				selectedItem.Name, booking.Date.Format("02.01.2006")))
+		return
+	}
+
 	// Обновляем заявку
-	err := b.db.UpdateBookingItem(context.Background(), bookingID, selectedItem.ID, selectedItem.Name)
+	err = b.db.UpdateBookingItem(context.Background(), bookingID, selectedItem.ID, selectedItem.Name)
 	if err != nil {
 		log.Printf("Error updating booking item: %v", err)
 		b.sendMessage(callback.Message.Chat.ID, "Ошибка при обновлении заявки")
@@ -281,12 +312,82 @@ func (b *Bot) handleChangeItem(update tgbotapi.Update) {
 	}
 
 	// Уведомляем пользователя
-	booking, _ := b.db.GetBooking(context.Background(), bookingID)
 	userMsg := tgbotapi.NewMessage(booking.UserID,
 		fmt.Sprintf("🔄 В вашей заявке #%d изменен аппарат на: %s", bookingID, selectedItem.Name))
 	b.bot.Send(userMsg)
 
 	b.sendMessage(callback.Message.Chat.ID, "✅ Аппарат успешно изменен")
+
+	// ВМЕСТО ВЫЗОВА showManagerBookingDetail, который требует Message, используем sendManagerBookingDetail
+	updatedBooking, err := b.db.GetBooking(context.Background(), bookingID)
+	if err != nil {
+		log.Printf("Error getting updated booking: %v", err)
+		return
+	}
+
+	// Отправляем обновленные детали заявки
+	b.sendManagerBookingDetail(callback.Message.Chat.ID, updatedBooking)
+}
+
+// sendManagerBookingDetail отправляет детали заявки в указанный чат (без использования update)
+func (b *Bot) sendManagerBookingDetail(chatID int64, booking *models.Booking) {
+	statusText := map[string]string{
+		"pending":   "⏳ Ожидает подтверждения",
+		"confirmed": "✅ Подтверждена",
+		"cancelled": "❌ Отменена",
+		"changed":   "🔄 Изменена",
+		"completed": "🏁 Завершена",
+	}
+
+	message := fmt.Sprintf(`📋 Заявка #%d
+
+👤 Клиент: %s
+📱 Телефон: %s
+🏢 Позиция: %s
+📅 Дата: %s
+📊 Статус: %s
+🕐 Создана: %s
+✏️ Обновлена: %s`,
+		booking.ID,
+		booking.UserName,
+		booking.Phone,
+		booking.ItemName,
+		booking.Date.Format("02.01.2006"),
+		statusText[booking.Status],
+		booking.CreatedAt.Format("02.01.2006 15:04"),
+		booking.UpdatedAt.Format("02.01.2006 15:04"),
+	)
+
+	msg := tgbotapi.NewMessage(chatID, message)
+
+	// Создаем инлайн-клавиатуру для управления заявкой
+	var rows [][]tgbotapi.InlineKeyboardButton
+
+	if booking.Status == "pending" || booking.Status == "changed" {
+		rows = append(rows, tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonData("✅ Подтвердить", fmt.Sprintf("confirm_%d", booking.ID)),
+			tgbotapi.NewInlineKeyboardButtonData("❌ Отклонить", fmt.Sprintf("reject_%d", booking.ID)),
+		))
+	}
+
+	if booking.Status == "confirmed" {
+		rows = append(rows, tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonData("🔄 Вернуть в работу", fmt.Sprintf("reopen_%d", booking.ID)),
+			tgbotapi.NewInlineKeyboardButtonData("🏁 Завершить", fmt.Sprintf("complete_%d", booking.ID)),
+		))
+	}
+
+	rows = append(rows, tgbotapi.NewInlineKeyboardRow(
+		tgbotapi.NewInlineKeyboardButtonData("✏️ Изменить аппарат", fmt.Sprintf("change_item_%d", booking.ID)),
+		tgbotapi.NewInlineKeyboardButtonData("📞 Позвонить", fmt.Sprintf("tel:%s", booking.Phone)),
+	))
+
+	if len(rows) > 0 {
+		keyboard := tgbotapi.NewInlineKeyboardMarkup(rows...)
+		msg.ReplyMarkup = &keyboard
+	}
+
+	b.bot.Send(msg)
 }
 
 // reopenBooking возврат заявки в работу
@@ -321,4 +422,152 @@ func (b *Bot) completeBooking(booking *models.Booking, managerChatID int64) {
 
 	managerMsg := tgbotapi.NewMessage(managerChatID, "✅ Заявка завершена")
 	b.bot.Send(managerMsg)
+}
+
+// showManagerAvailability показывает доступность аппаратов на неделю
+func (b *Bot) showManagerAvailability(update tgbotapi.Update) {
+	if !b.isManager(update.Message.From.ID) {
+		return
+	}
+
+	startDate := time.Now()
+	var message strings.Builder
+	message.WriteString("📊 Доступность аппаратов на ближайшие 7 дней:\n\n")
+
+	for _, item := range b.items {
+		message.WriteString(fmt.Sprintf("🏢 %s (всего: %d):\n", item.Name, item.TotalQuantity))
+
+		availability, err := b.db.GetAvailabilityForPeriod(context.Background(), item.ID, startDate, 7)
+		if err != nil {
+			log.Printf("Error getting availability: %v", err)
+			message.WriteString("   Ошибка получения данных\n")
+			continue
+		}
+
+		for _, avail := range availability {
+			status := fmt.Sprintf("✅ Свободно (%d/%d)", avail.Available, item.TotalQuantity)
+			if avail.Available == 0 {
+				status = fmt.Sprintf("❌ Занято (%d/%d)", avail.Booked, item.TotalQuantity)
+			} else if avail.Available < item.TotalQuantity {
+				status = fmt.Sprintf("⚠️  Частично занято (%d/%d)", avail.Booked, item.TotalQuantity)
+			}
+
+			message.WriteString(fmt.Sprintf("   %s: %s\n",
+				avail.Date.Format("02.01"), status))
+		}
+		message.WriteString("\n")
+	}
+
+	// Добавляем команды для экспорта
+	message.WriteString("💾 Команды для экспорта:\n")
+	message.WriteString("/manager_export_week - экспорт текущей недели\n")
+	message.WriteString("/manager_export_range 2024-01-01 2024-01-31 - экспорт за период\n")
+
+	msg := tgbotapi.NewMessage(update.Message.Chat.ID, message.String())
+	b.bot.Send(msg)
+}
+
+// handleExportWeek экспорт данных за текущую неделю
+func (b *Bot) handleExportWeek(update tgbotapi.Update) {
+	if !b.isManager(update.Message.From.ID) {
+		return
+	}
+
+	startDate := time.Now()
+	endDate := startDate.AddDate(0, 0, 6) // +6 дней = неделя
+
+	filePath, err := b.exportToExcel(startDate, endDate)
+	if err != nil {
+		log.Printf("Error exporting to Excel: %v", err)
+		b.sendMessage(update.Message.Chat.ID, "Ошибка при создании файла экспорта")
+		return
+	}
+
+	// ОТПРАВКА ФАЙЛА
+	file, err := os.Open(filePath)
+	if err != nil {
+		log.Printf("Error opening file: %v", err)
+		b.sendMessage(update.Message.Chat.ID, "Ошибка при открытии файла")
+		return
+	}
+	defer file.Close()
+
+	fileReader := tgbotapi.FileReader{
+		Name:   filepath.Base(filePath),
+		Reader: file,
+	}
+
+	doc := tgbotapi.NewDocument(update.Message.Chat.ID, fileReader)
+	doc.Caption = fmt.Sprintf("📊 Экспорт данных с %s по %s",
+		startDate.Format("02.01.2006"), endDate.Format("02.01.2006"))
+
+	_, err = b.bot.Send(doc)
+	if err != nil {
+		log.Printf("Error sending document: %v", err)
+		b.sendMessage(update.Message.Chat.ID, "Ошибка при отправке файла")
+		return
+	}
+
+	b.sendMessage(update.Message.Chat.ID, "✅ Файл экспорта успешно отправлен")
+}
+
+// handleExportRange экспорт данных за указанный период
+func (b *Bot) handleExportRange(update tgbotapi.Update) {
+	if !b.isManager(update.Message.From.ID) {
+		return
+	}
+
+	parts := strings.Fields(update.Message.Text)
+	if len(parts) != 3 {
+		b.sendMessage(update.Message.Chat.ID,
+			"Использование: /manager_export_range ГГГГ-ММ-ДД ГГГГ-ММ-ДД\nПример: /manager_export_range 2024-01-01 2024-01-31")
+		return
+	}
+
+	startDate, err1 := time.Parse("2006-01-02", parts[1])
+	endDate, err2 := time.Parse("2006-01-02", parts[2])
+
+	if err1 != nil || err2 != nil {
+		b.sendMessage(update.Message.Chat.ID, "Неверный формат даты. Используйте: ГГГГ-ММ-ДД")
+		return
+	}
+
+	if startDate.After(endDate) {
+		b.sendMessage(update.Message.Chat.ID, "Начальная дата не может быть позже конечной")
+		return
+	}
+
+	filePath, err := b.exportToExcel(startDate, endDate)
+	if err != nil {
+		log.Printf("Error exporting to Excel: %v", err)
+		b.sendMessage(update.Message.Chat.ID, "Ошибка при создании файла экспорта")
+		return
+	}
+
+	// ОТПРАВКА ФАЙЛА
+	file, err := os.Open(filePath)
+	if err != nil {
+		log.Printf("Error opening file: %v", err)
+		b.sendMessage(update.Message.Chat.ID, "Ошибка при открытии файла")
+		return
+	}
+	defer file.Close()
+
+	fileReader := tgbotapi.FileReader{
+		Name:   filepath.Base(filePath),
+		Reader: file,
+	}
+
+	doc := tgbotapi.NewDocument(update.Message.Chat.ID, fileReader)
+	doc.Caption = fmt.Sprintf("📊 Экспорт данных с %s по %s",
+		startDate.Format("02.01.2006"), endDate.Format("02.01.2006"))
+
+	_, err = b.bot.Send(doc)
+	if err != nil {
+		log.Printf("Error sending document: %v", err)
+		b.sendMessage(update.Message.Chat.ID, "Ошибка при отправке файла")
+		return
+	}
+
+	b.sendMessage(update.Message.Chat.ID, "✅ Файл экспорта успешно отправлен")
 }

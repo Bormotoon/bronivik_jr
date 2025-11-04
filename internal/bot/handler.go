@@ -35,14 +35,16 @@ func NewBot(token string, config *config.Config, items []models.Item, db *databa
 }
 
 const (
-	StateMainMenu     = "main_menu"
-	StateSelectItem   = "select_item"
-	StateSelectDate   = "select_date"
-	StateViewSchedule = "view_schedule"
-	StatePersonalData = "personal_data"
-	StateEnterName    = "enter_name"
-	StatePhoneNumber  = "phone_number"
-	StateConfirmation = "confirmation"
+	StateMainMenu            = "main_menu"
+	StateSelectItem          = "select_item"
+	StateSelectDate          = "select_date"
+	StateViewSchedule        = "view_schedule"
+	StatePersonalData        = "personal_data"
+	StateEnterName           = "enter_name"
+	StatePhoneNumber         = "phone_number"
+	StateConfirmation        = "confirmation"
+	StateWaitingDate         = "waiting_date"
+	StateWaitingSpecificDate = "waiting_specific_date"
 )
 
 func (b *Bot) Start() {
@@ -76,9 +78,17 @@ func (b *Bot) handleMessage(update tgbotapi.Update) {
 	userID := update.Message.From.ID
 	text := update.Message.Text
 
+	// Проверка черного списка
+	if b.isBlacklisted(userID) {
+		return
+	}
+
 	// Проверка на менеджера
-	if b.isManager(update.Message.From.ID) {
-		b.handleManagerCommand(update)
+	if b.isManager(userID) {
+		handled := b.handleManagerCommand(update)
+		if handled {
+			return // Если команда менеджера обработана, выходим
+		}
 	}
 
 	state := b.getUserState(userID)
@@ -115,6 +125,17 @@ func (b *Bot) handleMessage(update tgbotapi.Update) {
 	case text == "➕ Создать заявку (Менеджер)":
 		b.startManagerBooking(update)
 
+	case text == "/manager_export_week":
+		b.handleExportWeek(update)
+
+	case strings.HasPrefix(text, "/manager_export_range"):
+		b.handleExportRange(update)
+
+	case text == "📊 Доступность":
+		b.showManagerAvailability(update)
+	case text == "💾 Экспорт недели":
+		b.handleExportWeek(update)
+
 	case text == "⬅️ Назад":
 		if state != nil {
 			// Возвращаемся к предыдущему шагу в зависимости от текущего состояния
@@ -145,8 +166,21 @@ func (b *Bot) handleMessage(update tgbotapi.Update) {
 			state.TempData["user_name"] = update.Message.From.FirstName + " " + update.Message.From.LastName
 			b.setUserState(update.Message.From.ID, StatePhoneNumber, state.TempData)
 			b.handlePhoneRequest(update)
+		} else if text == "📞 Контакты менеджеров" {
+			b.showManagerContacts(update)
+		} else if text == "❌ Отмена" {
+			b.clearUserState(update.Message.From.ID)
+			b.handleMainMenu(update)
 		} else {
 			// Сохраняем введенное имя
+			if len(text) < 2 {
+				b.sendMessage(update.Message.Chat.ID, "Имя слишком короткое. Введите имя длиной от 2 символов.")
+				return
+			}
+			if len(text) > 150 {
+				b.sendMessage(update.Message.Chat.ID, "Имя слишком длинное. Введите имя до 150 символов.")
+				return
+			}
 			state.TempData["user_name"] = text
 			b.setUserState(update.Message.From.ID, StatePhoneNumber, state.TempData)
 			b.handlePhoneRequest(update)
@@ -162,16 +196,13 @@ func (b *Bot) handleMessage(update tgbotapi.Update) {
 	case state != nil && state.CurrentStep == StateConfirmation && text == "✅ Подтвердить заявку":
 		b.finalizeBooking(update)
 
+	case state != nil && state.CurrentStep == StateWaitingDate:
+		b.handleDateInput(update, text, state)
+	case state != nil && state.CurrentStep == StateWaitingSpecificDate:
+		b.handleSpecificDateInput(update, text)
+
 	case text == "❌ Отмена":
 		b.clearUserState(update.Message.From.ID)
 		b.handleMainMenu(update)
-
-	default:
-		// Обработка дат и других вводов
-		if state != nil {
-			b.handleCustomInput(update, state)
-		} else {
-			b.handleMainMenu(update)
-		}
 	}
 }

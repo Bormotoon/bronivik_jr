@@ -82,6 +82,10 @@ func (b *Bot) handleMainMenu(update tgbotapi.Update) {
 	if b.isManager(update.Message.From.ID) {
 		rows = append(rows, tgbotapi.NewKeyboardButtonRow(
 			tgbotapi.NewKeyboardButton("👨‍💼 Все заявки"),
+			tgbotapi.NewKeyboardButton("📊 Доступность"),
+		))
+		rows = append(rows, tgbotapi.NewKeyboardButtonRow(
+			tgbotapi.NewKeyboardButton("💾 Экспорт недели"),
 			tgbotapi.NewKeyboardButton("➕ Создать заявку (Менеджер)"),
 		))
 	}
@@ -463,15 +467,9 @@ func (b *Bot) requestSpecificDate(update tgbotapi.Update) {
 	b.bot.Send(msg)
 }
 
-// handleCustomInput обрабатывает пользовательский ввод (даты и т.д.)
+// handleCustomInput ...
 func (b *Bot) handleCustomInput(update tgbotapi.Update, state *models.UserState) {
-	text := update.Message.Text
-
 	switch state.CurrentStep {
-	case "waiting_date":
-		b.handleDateInput(update, text, state)
-	case "waiting_specific_date":
-		b.handleSpecificDateInput(update, text)
 	default:
 		b.sendMessage(update.Message.Chat.ID, "Неизвестная команда. Используйте меню.")
 		b.handleMainMenu(update)
@@ -591,53 +589,53 @@ func (b *Bot) handleSpecificDateInput(update tgbotapi.Update, dateStr string) {
 }
 
 // handleExport обработка команды экспорта для менеджеров
-func (b *Bot) handleExport(update tgbotapi.Update) {
-	if !b.isManager(update.Message.From.ID) { // Исправлено: убрано преобразование int64
-		return
-	}
-
-	parts := strings.Fields(update.Message.Text)
-	if len(parts) != 3 {
-		b.sendMessage(update.Message.Chat.ID, "Использование: /export ГГГГ-ММ-ДД ГГГГ-ММ-ДД\nНапример: /export 2024-01-01 2024-01-31")
-		return
-	}
-
-	startDate, err1 := time.Parse("2006-01-02", parts[1])
-	endDate, err2 := time.Parse("2006-01-02", parts[2])
-
-	if err1 != nil || err2 != nil {
-		b.sendMessage(update.Message.Chat.ID, "Неверный формат даты. Используйте: ГГГГ-ММ-ДД")
-		return
-	}
-
-	bookings, err := b.db.GetBookingsByDateRange(context.Background(), startDate, endDate)
-	if err != nil {
-		log.Printf("Error getting bookings: %v", err)
-		b.sendMessage(update.Message.Chat.ID, "Ошибка при получении данных")
-		return
-	}
-
-	// Создаем простой текстовый отчет (в реальном приложении - CSV)
-	var report strings.Builder
-	report.WriteString(fmt.Sprintf("Отчет по бронированиям с %s по %s\n\n",
-		startDate.Format("02.01.2006"), endDate.Format("02.01.2006")))
-
-	for _, booking := range bookings {
-		report.WriteString(fmt.Sprintf("ID: %d\n", booking.ID))
-		report.WriteString(fmt.Sprintf("Позиция: %s\n", booking.ItemName))
-		report.WriteString(fmt.Sprintf("Дата: %s\n", booking.Date.Format("02.01.2006")))
-		report.WriteString(fmt.Sprintf("Клиент: %s\n", booking.UserName))
-		report.WriteString(fmt.Sprintf("Телефон: %s\n", booking.Phone))
-		report.WriteString(fmt.Sprintf("Статус: %s\n", booking.Status))
-		report.WriteString("---\n")
-	}
-
-	if len(bookings) == 0 {
-		report.WriteString("Бронирований не найдено")
-	}
-
-	b.sendMessage(update.Message.Chat.ID, report.String())
-}
+// func (b *Bot) handleExport(update tgbotapi.Update) {
+// 	if !b.isManager(update.Message.From.ID) { // Исправлено: убрано преобразование int64
+// 		return
+// 	}
+//
+// 	parts := strings.Fields(update.Message.Text)
+// 	if len(parts) != 3 {
+// 		b.sendMessage(update.Message.Chat.ID, "Использование: /export ГГГГ-ММ-ДД ГГГГ-ММ-ДД\nНапример: /export 2024-01-01 2024-01-31")
+// 		return
+// 	}
+//
+// 	startDate, err1 := time.Parse("2006-01-02", parts[1])
+// 	endDate, err2 := time.Parse("2006-01-02", parts[2])
+//
+// 	if err1 != nil || err2 != nil {
+// 		b.sendMessage(update.Message.Chat.ID, "Неверный формат даты. Используйте: ГГГГ-ММ-ДД")
+// 		return
+// 	}
+//
+// 	bookings, err := b.db.GetBookingsByDateRange(context.Background(), startDate, endDate)
+// 	if err != nil {
+// 		log.Printf("Error getting bookings: %v", err)
+// 		b.sendMessage(update.Message.Chat.ID, "Ошибка при получении данных")
+// 		return
+// 	}
+//
+// 	// Создаем простой текстовый отчет (в реальном приложении - CSV)
+// 	var report strings.Builder
+// 	report.WriteString(fmt.Sprintf("Отчет по бронированиям с %s по %s\n\n",
+// 		startDate.Format("02.01.2006"), endDate.Format("02.01.2006")))
+//
+// 	for _, booking := range bookings {
+// 		report.WriteString(fmt.Sprintf("ID: %d\n", booking.ID))
+// 		report.WriteString(fmt.Sprintf("Позиция: %s\n", booking.ItemName))
+// 		report.WriteString(fmt.Sprintf("Дата: %s\n", booking.Date.Format("02.01.2006")))
+// 		report.WriteString(fmt.Sprintf("Клиент: %s\n", booking.UserName))
+// 		report.WriteString(fmt.Sprintf("Телефон: %s\n", booking.Phone))
+// 		report.WriteString(fmt.Sprintf("Статус: %s\n", booking.Status))
+// 		report.WriteString("---\n")
+// 	}
+//
+// 	if len(bookings) == 0 {
+// 		report.WriteString("Бронирований не найдено")
+// 	}
+//
+// 	b.sendMessage(update.Message.Chat.ID, report.String())
+// }
 
 // confirmBooking подтверждение бронирования менеджером
 func (b *Bot) confirmBooking(booking *models.Booking, managerChatID int64) {

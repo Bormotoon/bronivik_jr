@@ -318,6 +318,46 @@ func (db *DB) GetUserBookings(ctx context.Context, userID int64) ([]models.Booki
 	return bookings, nil
 }
 
+// GetBookingWithAvailability проверяет доступность при смене аппарата
+func (db *DB) GetBookingWithAvailability(ctx context.Context, bookingID int64, newItemID int64) (*models.Booking, bool, error) {
+	booking, err := db.GetBooking(ctx, bookingID)
+	if err != nil {
+		return nil, false, err
+	}
+
+	available, err := db.CheckAvailability(ctx, newItemID, booking.Date)
+	if err != nil {
+		return nil, false, err
+	}
+
+	return booking, available, nil
+}
+
+// GetDailyBookings возвращает бронирования по дням для периода
+func (db *DB) GetDailyBookings(ctx context.Context, startDate, endDate time.Time) (map[string][]models.Booking, error) {
+	bookings, err := db.GetBookingsByDateRange(ctx, startDate, endDate)
+	if err != nil {
+		return nil, err
+	}
+
+	dailyBookings := make(map[string][]models.Booking)
+	for _, booking := range bookings {
+		dateKey := booking.Date.Format("2006-01-02")
+		dailyBookings[dateKey] = append(dailyBookings[dateKey], booking)
+	}
+
+	return dailyBookings, nil
+}
+
+// GetItems возвращает список всех позиций
+func (db *DB) GetItems() []models.Item {
+	items := make([]models.Item, 0, len(db.items))
+	for _, item := range db.items {
+		items = append(items, item)
+	}
+	return items
+}
+
 func (db *DB) Close() error {
 	return db.DB.Close()
 }
