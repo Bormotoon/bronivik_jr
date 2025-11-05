@@ -58,6 +58,8 @@ func (b *Bot) sendMessage(chatID int64, text string) {
 
 // handleMainMenu - главное меню с контактами
 func (b *Bot) handleMainMenu(update tgbotapi.Update) {
+	b.updateUserActivity(update.Message.From.ID)
+
 	msg := tgbotapi.NewMessage(update.Message.Chat.ID,
 		"Добро пожаловать! Выберите действие:")
 
@@ -87,6 +89,10 @@ func (b *Bot) handleMainMenu(update tgbotapi.Update) {
 		rows = append(rows, tgbotapi.NewKeyboardButtonRow(
 			tgbotapi.NewKeyboardButton("💾 Экспорт недели"),
 			tgbotapi.NewKeyboardButton("➕ Создать заявку (Менеджер)"),
+		))
+		rows = append(rows, tgbotapi.NewKeyboardButtonRow(
+			tgbotapi.NewKeyboardButton("🔄 Синхронизировать пользователей (Google Sheets)"),
+			tgbotapi.NewKeyboardButton("🔄 Синхронизировать бронирования (Google Sheets)"),
 		))
 	}
 
@@ -306,6 +312,16 @@ func (b *Bot) finalizeBooking(update tgbotapi.Update) {
 	// Уведомляем менеджеров
 	b.notifyManagers(booking)
 
+	if b.sheetsService != nil {
+		err := b.sheetsService.AppendBooking(&booking)
+		if err != nil {
+			log.Printf("Failed to sync booking to Google Sheets: %v", err)
+			// Не прерываем выполнение, просто логируем ошибку
+		} else {
+			log.Printf("Booking synced to Google Sheets: %d", booking.ID)
+		}
+	}
+
 	msg := tgbotapi.NewMessage(update.Message.Chat.ID,
 		fmt.Sprintf("✅ Ваша заявка #%d успешно создана! Менеджер свяжется с вами для подтверждения.", booking.ID))
 
@@ -330,6 +346,8 @@ func (b *Bot) handleContactReceived(update tgbotapi.Update) {
 
 // handleViewSchedule - меню просмотра расписания
 func (b *Bot) handleViewSchedule(update tgbotapi.Update) {
+	b.updateUserActivity(update.Message.From.ID)
+
 	msg := tgbotapi.NewMessage(update.Message.Chat.ID,
 		"Выберите период для просмотра расписания:")
 
@@ -699,23 +717,6 @@ func (b *Bot) rescheduleBooking(booking *models.Booking, managerChatID int64) {
 	b.bot.Send(managerMsg)
 }
 
-// handleCallbackQuery обработка callback запросов от inline кнопок
-func (b *Bot) handleCallbackQuery(update tgbotapi.Update) {
-	callback := update.CallbackQuery
-	data := callback.Data
-
-	if strings.HasPrefix(data, "confirm_") ||
-		strings.HasPrefix(data, "reject_") ||
-		strings.HasPrefix(data, "reschedule_") ||
-		strings.HasPrefix(data, "change_item_") ||
-		strings.HasPrefix(data, "reopen_") ||
-		strings.HasPrefix(data, "complete_") {
-		b.handleManagerAction(update)
-	} else if strings.HasPrefix(data, "change_to_") {
-		b.handleChangeItem(update)
-	}
-}
-
 // Добавьте этот метод в utils.go для отладки
 func (b *Bot) debugState(userID int64, message string) {
 	state := b.getUserState(userID)
@@ -769,6 +770,9 @@ func (b *Bot) handlePhoneReceived(update tgbotapi.Update, phone string) {
 	b.setUserState(update.Message.From.ID, StateConfirmation, state.TempData)
 
 	b.debugState(update.Message.From.ID, "handlePhoneReceived END")
+
+	// Сохраняем телефон пользователя
+	b.updateUserPhone(update.Message.From.ID, normalizedPhone)
 
 	// Проверяем доступность еще раз
 	available, err := b.db.CheckAvailability(context.Background(), selectedItem.ID, date)

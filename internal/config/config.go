@@ -21,6 +21,7 @@ type Config struct {
 	Blacklist        []int64          `yaml:"blacklist"`
 	Items            []models.Item    `yaml:"items"`
 	Exports          ExportConfig     `yaml:"exports"`
+	Google           GoogleConfig     `yaml:"google"`
 }
 
 type ExportConfig struct {
@@ -83,6 +84,12 @@ type LoggingConfig struct {
 	FilePath string `yaml:"file_path"`
 }
 
+type GoogleConfig struct {
+	GoogleCredentialsFile string `yaml:"credentials_file"`
+	UsersSpreadSheetId    string `yaml:"users_spreadsheet_id"`
+	BookingSpreadSheetId  string `yaml:"bookings_spreadsheet_id"`
+}
+
 func Load(configPath string) (*Config, error) {
 	// Загружаем .env файл если существует
 	err := godotenv.Load(".env")
@@ -103,23 +110,5 @@ func Load(configPath string) (*Config, error) {
 		return nil, err
 	}
 
-	// Заменяем переменные окружения
-	// config.expandEnvVars()
-
 	return &config, nil
-}
-
-func (c *Config) expandEnvVars() {
-	c.Telegram.BotToken = os.ExpandEnv(c.Telegram.BotToken)
-	c.Database.Postgres.Host = os.ExpandEnv(c.Database.Postgres.Host)
-	c.Database.Postgres.User = os.ExpandEnv(c.Database.Postgres.User)
-	c.Database.Postgres.Password = os.ExpandEnv(c.Database.Postgres.Password)
-	c.Database.Postgres.DBName = os.ExpandEnv(c.Database.Postgres.DBName)
-	c.Database.Postgres.SSLMode = os.ExpandEnv(c.Database.Postgres.SSLMode)
-	c.Database.Postgres.MigrationTable = os.ExpandEnv(c.Database.Postgres.MigrationTable)
-
-	c.Redis.Address = os.ExpandEnv(c.Redis.Address)
-	c.Redis.Password = os.ExpandEnv(c.Redis.Password)
-	c.Backup.StoragePath = os.ExpandEnv(c.Backup.StoragePath)
-	c.Logging.FilePath = os.ExpandEnv(c.Logging.FilePath)
 }

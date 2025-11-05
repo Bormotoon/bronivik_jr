@@ -20,19 +20,44 @@ func (b *Bot) handleManagerCommand(update tgbotapi.Update) bool {
 		return false
 	}
 
+	userID := update.Message.From.ID
 	text := update.Message.Text
 
 	switch {
-	case text == "/manager_create_booking":
-		b.startManagerBooking(update)
-	case text == "/manager_bookings":
+	case text == "👨‍💼 Все заявки":
 		b.showManagerBookings(update)
-	case text == "/manager_availability":
-		b.showManagerAvailability(update)
+
+	case text == "➕ Создать заявку (Менеджер)":
+		b.startManagerBooking(update)
+
 	case text == "/manager_export_week":
 		b.handleExportWeek(update)
+
 	case strings.HasPrefix(text, "/manager_export_range"):
 		b.handleExportRange(update)
+
+		// секретная команда, доступная менеджерам, но не отображаемся у них в меню
+	case text == "/stats" && b.isManager(userID):
+		b.getUserStats(update)
+
+	case text == "💾 Экспорт недели":
+		b.handleExportWeek(update)
+
+	case text == "/manager_create_booking":
+		b.startManagerBooking(update)
+
+	case text == "/manager_bookings":
+		b.showManagerBookings(update)
+
+	case text == "/manager_availability":
+		b.showManagerAvailability(update)
+
+	case text == "/manager_export_week":
+		b.handleExportWeek(update)
+
+	case strings.HasPrefix(text, "/manager_export_range"):
+		b.handleExportRange(update)
+
 	case strings.HasPrefix(text, "/manager_booking_"):
 		// Просмотр конкретной заявки
 		parts := strings.Split(text, "_")
@@ -42,6 +67,14 @@ func (b *Bot) handleManagerCommand(update tgbotapi.Update) bool {
 				b.showManagerBookingDetail(update, bookingID)
 			}
 		}
+
+	case text == "🔄 Синхронизировать пользователей (Google Sheets)":
+		b.SyncUsersToSheets()
+		b.sendMessage(update.Message.Chat.ID, "✅ Пользователи синхронизированы с Google Таблицей")
+
+	case text == "🔄 Синхронизировать бронирования (Google Sheets)":
+		b.SyncBookingsToSheets()
+		b.sendMessage(update.Message.Chat.ID, "✅ Бронирования синхронизированы с Google Таблицей")
 	}
 
 	return false

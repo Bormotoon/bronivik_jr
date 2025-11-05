@@ -57,3 +57,8 @@ logging:
   format: "json"  # json/text
   output: "stdout" # stdout/file
   file_path: "/var/log/bot/app.log"
+
+google:
+  credentials_file: ${GOOGLE_CREDENTIALS_FILE}
+  users_spreadsheet_id: ${USERS_SPREADSHEET_ID}
+  bookings_spreadsheet_id: ${BOOKINGS_SPREADSHEET_ID}

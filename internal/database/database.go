@@ -46,6 +46,22 @@ func NewDB(path string) (*DB, error) {
 
 func createTables(db *sql.DB) error {
 	queries := []string{
+		// Таблица пользователей
+		`CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            telegram_id INTEGER UNIQUE NOT NULL,
+            username TEXT,
+            first_name TEXT NOT NULL,
+            last_name TEXT,
+            phone TEXT,
+            is_manager BOOLEAN NOT NULL DEFAULT 0,
+            is_blacklisted BOOLEAN NOT NULL DEFAULT 0,
+            language_code TEXT,
+            last_activity DATETIME NOT NULL,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )`,
+		// Таблица бронирований
 		`CREATE TABLE IF NOT EXISTS bookings (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id INTEGER NOT NULL,
@@ -59,6 +75,13 @@ func createTables(db *sql.DB) error {
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
             updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
         )`,
+
+		// Индексы для пользователей
+		`CREATE INDEX IF NOT EXISTS idx_users_telegram_id ON users(telegram_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_users_is_manager ON users(is_manager)`,
+		`CREATE INDEX IF NOT EXISTS idx_users_is_blacklisted ON users(is_blacklisted)`,
+
+		// Существующие индексы для бронирований
 		`CREATE INDEX IF NOT EXISTS idx_bookings_date ON bookings(date)`,
 		`CREATE INDEX IF NOT EXISTS idx_bookings_status ON bookings(status)`,
 		`CREATE INDEX IF NOT EXISTS idx_bookings_item_id ON bookings(item_id)`,
@@ -356,6 +379,218 @@ func (db *DB) GetItems() []models.Item {
 		items = append(items, item)
 	}
 	return items
+}
+
+// User methods
+
+// CreateOrUpdateUser создает или обновляет пользователя
+func (db *DB) CreateOrUpdateUser(ctx context.Context, user *models.User) error {
+	query := `
+        INSERT INTO users (telegram_id, username, first_name, last_name, phone, is_manager, is_blacklisted, language_code, last_activity, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(telegram_id) DO UPDATE SET
+            username = excluded.username,
+            first_name = excluded.first_name,
+            last_name = excluded.last_name,
+            phone = COALESCE(excluded.phone, phone),
+            is_manager = excluded.is_manager,
+            is_blacklisted = excluded.is_blacklisted,
+            language_code = excluded.language_code,
+            last_activity = excluded.last_activity,
+            updated_at = excluded.updated_at
+    `
+
+	_, err := db.ExecContext(ctx, query,
+		user.TelegramID,
+		user.Username,
+		user.FirstName,
+		user.LastName,
+		user.Phone,
+		user.IsManager,
+		user.IsBlacklisted,
+		user.LanguageCode,
+		user.LastActivity,
+		user.CreatedAt,
+		time.Now(),
+	)
+
+	return err
+}
+
+// GetUserByTelegramID возвращает пользователя по Telegram ID
+func (db *DB) GetUserByTelegramID(ctx context.Context, telegramID int64) (*models.User, error) {
+	query := `
+        SELECT id, telegram_id, username, first_name, last_name, phone, is_manager, is_blacklisted, language_code, last_activity, created_at, updated_at
+        FROM users WHERE telegram_id = ?
+    `
+
+	var user models.User
+	err := db.QueryRowContext(ctx, query, telegramID).Scan(
+		&user.ID,
+		&user.TelegramID,
+		&user.Username,
+		&user.FirstName,
+		&user.LastName,
+		&user.Phone,
+		&user.IsManager,
+		&user.IsBlacklisted,
+		&user.LanguageCode,
+		&user.LastActivity,
+		&user.CreatedAt,
+		&user.UpdatedAt,
+	)
+
+	if err != nil {
+		return nil, err
+	}
+
+	return &user, nil
+}
+
+// UpdateUserPhone обновляет номер телефона пользователя
+func (db *DB) UpdateUserPhone(ctx context.Context, telegramID int64, phone string) error {
+	query := `UPDATE users SET phone = ?, updated_at = ? WHERE telegram_id = ?`
+
+	_, err := db.ExecContext(ctx, query, phone, time.Now(), telegramID)
+	return err
+}
+
+// UpdateUserActivity обновляет время последней активности
+func (db *DB) UpdateUserActivity(ctx context.Context, telegramID int64) error {
+	query := `UPDATE users SET last_activity = ?, updated_at = ? WHERE telegram_id = ?`
+
+	_, err := db.ExecContext(ctx, query, time.Now(), time.Now(), telegramID)
+	return err
+}
+
+// GetAllUsers возвращает всех пользователей
+func (db *DB) GetAllUsers(ctx context.Context) ([]models.User, error) {
+	query := `
+        SELECT id, telegram_id, username, first_name, last_name, phone, is_manager, is_blacklisted, language_code, last_activity, created_at, updated_at
+        FROM users ORDER BY created_at DESC
+    `
+
+	rows, err := db.QueryContext(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var users []models.User
+	for rows.Next() {
+		var user models.User
+		err := rows.Scan(
+			&user.ID,
+			&user.TelegramID,
+			&user.Username,
+			&user.FirstName,
+			&user.LastName,
+			&user.Phone,
+			&user.IsManager,
+			&user.IsBlacklisted,
+			&user.LanguageCode,
+			&user.LastActivity,
+			&user.CreatedAt,
+			&user.UpdatedAt,
+		)
+		if err != nil {
+			return nil, err
+		}
+		users = append(users, user)
+	}
+
+	if err = rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return users, nil
+}
+
+// GetUsersByManagerStatus возвращает пользователей по статусу менеджера
+func (db *DB) GetUsersByManagerStatus(ctx context.Context, isManager bool) ([]models.User, error) {
+	query := `
+        SELECT id, telegram_id, username, first_name, last_name, phone, is_manager, is_blacklisted, language_code, last_activity, created_at, updated_at
+        FROM users WHERE is_manager = ? ORDER BY created_at DESC
+    `
+
+	rows, err := db.QueryContext(ctx, query, isManager)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var users []models.User
+	for rows.Next() {
+		var user models.User
+		err := rows.Scan(
+			&user.ID,
+			&user.TelegramID,
+			&user.Username,
+			&user.FirstName,
+			&user.LastName,
+			&user.Phone,
+			&user.IsManager,
+			&user.IsBlacklisted,
+			&user.LanguageCode,
+			&user.LastActivity,
+			&user.CreatedAt,
+			&user.UpdatedAt,
+		)
+		if err != nil {
+			return nil, err
+		}
+		users = append(users, user)
+	}
+
+	if err = rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return users, nil
+}
+
+// GetActiveUsers возвращает пользователей с активностью за последние N дней
+func (db *DB) GetActiveUsers(ctx context.Context, days int) ([]models.User, error) {
+	query := `
+        SELECT id, telegram_id, username, first_name, last_name, phone, is_manager, is_blacklisted, language_code, last_activity, created_at, updated_at
+        FROM users WHERE last_activity >= ? ORDER BY last_activity DESC
+    `
+
+	cutoffDate := time.Now().AddDate(0, 0, -days)
+	rows, err := db.QueryContext(ctx, query, cutoffDate)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var users []models.User
+	for rows.Next() {
+		var user models.User
+		err := rows.Scan(
+			&user.ID,
+			&user.TelegramID,
+			&user.Username,
+			&user.FirstName,
+			&user.LastName,
+			&user.Phone,
+			&user.IsManager,
+			&user.IsBlacklisted,
+			&user.LanguageCode,
+			&user.LastActivity,
+			&user.CreatedAt,
+			&user.UpdatedAt,
+		)
+		if err != nil {
+			return nil, err
+		}
+		users = append(users, user)
+	}
+
+	if err = rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return users, nil
 }
 
 func (db *DB) Close() error {

@@ -8,17 +8,12 @@ import (
 	"bronivik/internal/bot"
 	"bronivik/internal/config"
 	"bronivik/internal/database"
+	"bronivik/internal/google"
 	"bronivik/internal/models"
 	"gopkg.in/yaml.v2"
 )
 
 func main() {
-	// Загрузка основной конфигурации
-	// configData, err := os.ReadFile("configs/config.yaml")
-	// if err != nil {
-	// 	log.Fatal("Ошибка чтения config.yaml:", err)
-	// }
-
 	// Загрузка конфигурации
 	configPath := os.Getenv("CONFIG_PATH")
 	if configPath == "" {
@@ -26,11 +21,6 @@ func main() {
 	}
 
 	cfg, err := config.Load(configPath)
-
-	// var cfg config.Config
-	// if err := yaml.Unmarshal(configData, &cfg); err != nil {
-	// 	log.Fatal("Ошибка парсинга config.yaml:", err)
-	// }
 
 	// Загрузка позиций из отдельного файла
 	itemsData, err := os.ReadFile("configs/items.yaml")
@@ -68,8 +58,31 @@ func main() {
 		log.Fatal("Задайте токен бота в config.yaml")
 	}
 
+	// Инициализация Google Sheets через API Key
+	var sheetsService *google.SheetsService
+	if cfg.Google.GoogleCredentialsFile == "" || cfg.Google.UsersSpreadSheetId == "" || cfg.Google.BookingSpreadSheetId == "" {
+		log.Fatal("Нехватает переменных для подключения к Гуглу", err)
+	}
+
+	service, err := google.NewSimpleSheetsService(
+		cfg.Google.GoogleCredentialsFile,
+		cfg.Google.UsersSpreadSheetId,
+		cfg.Google.BookingSpreadSheetId,
+	)
+	if err != nil {
+		log.Printf("Warning: Failed to initialize Google Sheets service: %v", err)
+	}
+
+	// Тестируем подключение
+	if err := service.TestConnection(); err != nil {
+		log.Fatalf("Warning: Google Sheets connection test failed: %v", err)
+	} else {
+		sheetsService = service
+		log.Println("Google Sheets service initialized successfully")
+	}
+
 	// Создание и запуск бота
-	telegramBot, err := bot.NewBot(cfg.Telegram.BotToken, cfg, itemsConfig.Items, db)
+	telegramBot, err := bot.NewBot(cfg.Telegram.BotToken, cfg, itemsConfig.Items, db, sheetsService)
 	if err != nil {
 		log.Fatal("Ошибка создания бота:", err)
 	}

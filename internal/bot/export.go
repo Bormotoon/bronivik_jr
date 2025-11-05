@@ -249,3 +249,80 @@ func getLastColumn(colCount int) string {
 	secondChar := string('A' + (colCount-1)%26)
 	return firstChar + secondChar
 }
+
+// exportUsersToExcel создает Excel файл с данными пользователей
+func (b *Bot) exportUsersToExcel(users []models.User) (string, error) {
+	// Создаем папку для экспорта, если не существует
+	if err := os.MkdirAll(b.config.Exports.Path, 0755); err != nil {
+		return "", fmt.Errorf("error creating export directory: %v", err)
+	}
+
+	// Создаем новый Excel файл
+	f := excelize.NewFile()
+
+	// Создаем лист с пользователями
+	index, err := f.NewSheet("Пользователи")
+	if err != nil {
+		return "", fmt.Errorf("error creating sheet: %v", err)
+	}
+	f.SetActiveSheet(index)
+
+	// Заголовки
+	headers := []string{"ID", "Telegram ID", "Username", "Имя", "Фамилия", "Телефон", "Менеджер", "Черный список", "Язык", "Последняя активность", "Дата регистрации"}
+	for i, header := range headers {
+		cell, _ := excelize.CoordinatesToCellName(i+1, 1)
+		f.SetCellValue("Пользователи", cell, header)
+		// f.SetCellStyle("Пользователи", cell, cell, f.SetCellStyle("Пользователи", cell, "bold")
+	}
+
+	// Данные пользователей
+	for i, user := range users {
+		row := i + 2
+		f.SetCellValue("Пользователи", fmt.Sprintf("A%d", row), user.ID)
+		f.SetCellValue("Пользователи", fmt.Sprintf("B%d", row), user.TelegramID)
+		f.SetCellValue("Пользователи", fmt.Sprintf("C%d", row), user.Username)
+		f.SetCellValue("Пользователи", fmt.Sprintf("D%d", row), user.FirstName)
+		f.SetCellValue("Пользователи", fmt.Sprintf("E%d", row), user.LastName)
+		f.SetCellValue("Пользователи", fmt.Sprintf("F%d", row), user.Phone)
+		f.SetCellValue("Пользователи", fmt.Sprintf("G%d", row), boolToYesNo(user.IsManager))
+		f.SetCellValue("Пользователи", fmt.Sprintf("H%d", row), boolToYesNo(user.IsBlacklisted))
+		f.SetCellValue("Пользователи", fmt.Sprintf("I%d", row), user.LanguageCode)
+		f.SetCellValue("Пользователи", fmt.Sprintf("J%d", row), user.LastActivity.Format("02.01.2006 15:04"))
+		f.SetCellValue("Пользователи", fmt.Sprintf("K%d", row), user.CreatedAt.Format("02.01.2006 15:04"))
+	}
+
+	// Настраиваем ширину колонок
+	f.SetColWidth("Пользователи", "A", "A", 10)
+	f.SetColWidth("Пользователи", "B", "B", 15)
+	f.SetColWidth("Пользователи", "C", "C", 20)
+	f.SetColWidth("Пользователи", "D", "D", 15)
+	f.SetColWidth("Пользователи", "E", "E", 15)
+	f.SetColWidth("Пользователи", "F", "F", 15)
+	f.SetColWidth("Пользователи", "G", "G", 10)
+	f.SetColWidth("Пользователи", "H", "H", 12)
+	f.SetColWidth("Пользователи", "I", "I", 10)
+	f.SetColWidth("Пользователи", "J", "J", 20)
+	f.SetColWidth("Пользователи", "K", "K", 20)
+
+	// Удаляем стандартный лист
+	f.DeleteSheet("Sheet1")
+
+	// Сохраняем файл
+	fileName := fmt.Sprintf("users_export_%s.xlsx", time.Now().Format("2006-01-02_15-04-05"))
+	filePath := filepath.Join(b.config.Exports.Path, fileName)
+
+	if err := f.SaveAs(filePath); err != nil {
+		return "", fmt.Errorf("error saving file: %v", err)
+	}
+
+	log.Printf("Users Excel file created: %s", filePath)
+	return filePath, nil
+}
+
+// boolToYesNo преобразует bool в "Да"/"Нет"
+func boolToYesNo(b bool) string {
+	if b {
+		return "Да"
+	}
+	return "Нет"
+}

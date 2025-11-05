@@ -1,36 +1,43 @@
 package bot
 
 import (
+	"context"
+	"fmt"
 	"log"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"bronivik/internal/config"
 	"bronivik/internal/database"
+	"bronivik/internal/google"
 	"bronivik/internal/models"
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 )
 
 type Bot struct {
-	bot        *tgbotapi.BotAPI
-	config     *config.Config
-	items      []models.Item
-	db         *database.DB
-	userStates map[int64]*models.UserState
+	bot           *tgbotapi.BotAPI
+	config        *config.Config
+	items         []models.Item
+	db            *database.DB
+	userStates    map[int64]*models.UserState
+	sheetsService *google.SheetsService
 }
 
-func NewBot(token string, config *config.Config, items []models.Item, db *database.DB) (*Bot, error) {
+func NewBot(token string, config *config.Config, items []models.Item, db *database.DB, googleService *google.SheetsService) (*Bot, error) {
 	botAPI, err := tgbotapi.NewBotAPI(token)
 	if err != nil {
 		return nil, err
 	}
 
 	return &Bot{
-		bot:        botAPI,
-		config:     config,
-		items:      items,
-		db:         db,
-		userStates: make(map[int64]*models.UserState),
+		bot:           botAPI,
+		config:        config,
+		items:         items,
+		db:            db,
+		userStates:    make(map[int64]*models.UserState),
+		sheetsService: googleService,
 	}, nil
 }
 
@@ -96,7 +103,7 @@ func (b *Bot) handleMessage(update tgbotapi.Update) {
 	switch {
 	case text == "/start" || strings.ToLower(text) == "сброс" || strings.ToLower(text) == "reset":
 		b.clearUserState(update.Message.From.ID)
-		b.handleMainMenu(update)
+		b.handleStartWithUserTracking(update)
 
 	case text == "📞 Контакты менеджеров":
 		b.showManagerContacts(update)
@@ -119,22 +126,8 @@ func (b *Bot) handleMessage(update tgbotapi.Update) {
 	case text == "🗓 Выбрать дату":
 		b.requestSpecificDate(update)
 
-	case text == "👨‍💼 Все заявки":
-		b.showManagerBookings(update)
-
-	case text == "➕ Создать заявку (Менеджер)":
-		b.startManagerBooking(update)
-
-	case text == "/manager_export_week":
-		b.handleExportWeek(update)
-
-	case strings.HasPrefix(text, "/manager_export_range"):
-		b.handleExportRange(update)
-
 	case text == "📊 Доступность":
 		b.showManagerAvailability(update)
-	case text == "💾 Экспорт недели":
-		b.handleExportWeek(update)
 
 	case text == "⬅️ Назад":
 		if state != nil {
@@ -198,11 +191,345 @@ func (b *Bot) handleMessage(update tgbotapi.Update) {
 
 	case state != nil && state.CurrentStep == StateWaitingDate:
 		b.handleDateInput(update, text, state)
+
 	case state != nil && state.CurrentStep == StateWaitingSpecificDate:
 		b.handleSpecificDateInput(update, text)
 
 	case text == "❌ Отмена":
 		b.clearUserState(update.Message.From.ID)
 		b.handleMainMenu(update)
+	}
+}
+
+// handleCallbackQuery обработка callback запросов от inline кнопок
+func (b *Bot) handleCallbackQuery(update tgbotapi.Update) {
+	callback := update.CallbackQuery
+	if callback == nil {
+		return
+	}
+
+	// Проверка черного списка
+	if b.isBlacklisted(callback.From.ID) {
+		return
+	}
+
+	data := callback.Data
+
+	switch {
+	case data == "export_users":
+		b.handleExportUsers(update)
+
+	case strings.HasPrefix(data, "confirm_"),
+		strings.HasPrefix(data, "reject_"),
+		strings.HasPrefix(data, "reschedule_"),
+		strings.HasPrefix(data, "change_item_"),
+		strings.HasPrefix(data, "reopen_"),
+		strings.HasPrefix(data, "complete_"):
+		b.handleManagerAction(update)
+
+	case strings.HasPrefix(data, "change_to_"):
+		b.handleChangeItem(update)
+
+	default:
+		log.Printf("Unknown callback data: %s", callback.Data)
+	}
+
+	// Ответ на callback (убирает "часики" на кнопке)
+	b.bot.Send(tgbotapi.NewCallback(callback.ID, ""))
+}
+
+// saveUser сохраняет/обновляет информацию о пользователе
+func (b *Bot) saveUser(update tgbotapi.Update) {
+	user := update.Message.From
+	if user == nil {
+		return
+	}
+
+	// Проверяем, является ли пользователь менеджером или в черном списке
+	isManager := b.isManager(user.ID)
+	isBlacklisted := b.isBlacklisted(user.ID)
+
+	// Создаем модель пользователя
+	dbUser := &models.User{
+		TelegramID:    user.ID,
+		Username:      user.UserName,
+		FirstName:     user.FirstName,
+		LastName:      user.LastName,
+		Phone:         "", // Телефон будет обновлен позже, если пользователь его предоставит
+		IsManager:     isManager,
+		IsBlacklisted: isBlacklisted,
+		LanguageCode:  user.LanguageCode,
+		LastActivity:  time.Now(),
+		CreatedAt:     time.Now(),
+		UpdatedAt:     time.Now(),
+	}
+
+	// Сохраняем в базу данных
+	err := b.db.CreateOrUpdateUser(context.Background(), dbUser)
+	if err != nil {
+		log.Printf("Ошибка при сохранении пользователя %d: %v", user.ID, err)
+	} else {
+		log.Printf("Пользователь сохранен: %s (ID: %d)", user.FirstName, user.ID)
+	}
+}
+
+// updateUserPhone обновляет номер телефона пользователя
+func (b *Bot) updateUserPhone(telegramID int64, phone string) {
+	err := b.db.UpdateUserPhone(context.Background(), telegramID, phone)
+	if err != nil {
+		log.Printf("Ошибка при обновлении телефона пользователя %d: %v", telegramID, err)
+	} else {
+		log.Printf("Телефон обновлен для пользователя %d", telegramID)
+	}
+}
+
+// updateUserActivity обновляет время последней активности пользователя
+func (b *Bot) updateUserActivity(telegramID int64) {
+	err := b.db.UpdateUserActivity(context.Background(), telegramID)
+	if err != nil {
+		log.Printf("Ошибка при обновлении активности пользователя %d: %v", telegramID, err)
+	}
+}
+
+// handleStartWithUserTracking обработка /start с сохранением пользователя
+func (b *Bot) handleStartWithUserTracking(update tgbotapi.Update) {
+	// Сохраняем пользователя
+	b.saveUser(update)
+
+	// Обновляем активность
+	b.updateUserActivity(update.Message.From.ID)
+
+	// Показываем главное меню
+	b.handleMainMenu(update)
+}
+
+// getUserStats возвращает статистику пользователей (для менеджеров)
+func (b *Bot) getUserStats(update tgbotapi.Update) {
+	if !b.isManager(update.Message.From.ID) {
+		return
+	}
+
+	ctx := context.Background()
+
+	// Получаем общую статистику
+	allUsers, err := b.db.GetAllUsers(ctx)
+	if err != nil {
+		log.Printf("Error getting users: %v", err)
+		b.sendMessage(update.Message.Chat.ID, "Ошибка при получении статистики")
+		return
+	}
+
+	activeUsers, err := b.db.GetActiveUsers(ctx, 30) // Активные за последние 30 дней
+	if err != nil {
+		log.Printf("Error getting active users: %v", err)
+	}
+
+	managers, err := b.db.GetUsersByManagerStatus(ctx, true)
+	if err != nil {
+		log.Printf("Error getting managers: %v", err)
+	}
+
+	_, err = b.db.GetUsersByManagerStatus(ctx, false) // Черный список - это не менеджеры с is_blacklisted = true
+	// Нужно отдельно считать черный список
+	var blacklistedCount int
+	for _, user := range allUsers {
+		if user.IsBlacklisted {
+			blacklistedCount++
+		}
+	}
+
+	// Формируем сообщение со статистикой
+	var message strings.Builder
+	message.WriteString("📊 *Статистика пользователей*\n\n")
+	message.WriteString(fmt.Sprintf("👥 Всего пользователей: *%d*\n", len(allUsers)))
+	message.WriteString(fmt.Sprintf("🟢 Активных (30 дней): *%d*\n", len(activeUsers)))
+	message.WriteString(fmt.Sprintf("👨‍💼 Менеджеров: *%d*\n", len(managers)))
+	message.WriteString(fmt.Sprintf("🚫 В черном списке: *%d*\n\n", blacklistedCount))
+
+	// Последние 5 пользователей
+	message.WriteString("📈 *Последние пользователи:*\n")
+	count := 5
+	if len(allUsers) < count {
+		count = len(allUsers)
+	}
+
+	for i := 0; i < count; i++ {
+		user := allUsers[i]
+		emoji := "👤"
+		if user.IsManager {
+			emoji = "👨‍💼"
+		} else if user.IsBlacklisted {
+			emoji = "🚫"
+		}
+
+		message.WriteString(fmt.Sprintf("%s %s %s - %s\n",
+			emoji,
+			user.FirstName,
+			user.LastName,
+			user.LastActivity.Format("02.01.2006")))
+	}
+
+	msg := tgbotapi.NewMessage(update.Message.Chat.ID, message.String())
+	msg.ParseMode = "Markdown"
+
+	// Добавляем кнопку для экспорта пользователей
+	keyboard := tgbotapi.NewInlineKeyboardMarkup(
+		tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonData("📤 Экспорт пользователей", "export_users"),
+		),
+	)
+	msg.ReplyMarkup = &keyboard
+
+	b.bot.Send(msg)
+}
+
+// handleExportUsers обработка экспорта пользователей
+func (b *Bot) handleExportUsers(update tgbotapi.Update) {
+	callback := update.CallbackQuery
+	if callback == nil || !b.isManager(callback.From.ID) {
+		return
+	}
+
+	users, err := b.db.GetAllUsers(context.Background())
+	if err != nil {
+		log.Printf("Error getting users for export: %v", err)
+		b.sendMessage(callback.Message.Chat.ID, "Ошибка при получении данных пользователей")
+		return
+	}
+
+	filePath, err := b.exportUsersToExcel(users)
+	if err != nil {
+		log.Printf("Error exporting users to Excel: %v", err)
+		b.sendMessage(callback.Message.Chat.ID, "Ошибка при создании файла экспорта")
+		return
+	}
+
+	// Отправляем файл
+	file, err := os.Open(filePath)
+	if err != nil {
+		log.Printf("Error opening file: %v", err)
+		b.sendMessage(callback.Message.Chat.ID, "Ошибка при открытии файла")
+		return
+	}
+	defer file.Close()
+
+	fileReader := tgbotapi.FileReader{
+		Name:   filepath.Base(filePath),
+		Reader: file,
+	}
+
+	doc := tgbotapi.NewDocument(callback.Message.Chat.ID, fileReader)
+	doc.Caption = "📊 Экспорт данных пользователей"
+
+	_, err = b.bot.Send(doc)
+	if err != nil {
+		log.Printf("Error sending document: %v", err)
+		b.sendMessage(callback.Message.Chat.ID, "Ошибка при отправке файла")
+		return
+	}
+
+	b.sendMessage(callback.Message.Chat.ID, "✅ Файл с пользователями успешно отправлен")
+}
+
+// SyncUsersToSheets синхронизирует пользователей с Google Sheets
+func (b *Bot) SyncUsersToSheets() {
+	if b.sheetsService == nil {
+		return
+	}
+
+	users, err := b.db.GetAllUsers(context.Background())
+	if err != nil {
+		log.Printf("Failed to get users for Google Sheets sync: %v", err)
+		return
+	}
+
+	var googleUsers []*models.User
+	for _, user := range users {
+		googleUsers = append(googleUsers, &models.User{
+			ID:            user.ID,
+			TelegramID:    user.TelegramID,
+			Username:      user.Username,
+			FirstName:     user.FirstName,
+			LastName:      user.LastName,
+			Phone:         user.Phone,
+			IsManager:     user.IsManager,
+			IsBlacklisted: user.IsBlacklisted,
+			LanguageCode:  user.LanguageCode,
+			LastActivity:  user.LastActivity,
+			CreatedAt:     user.CreatedAt,
+			UpdatedAt:     user.UpdatedAt,
+		})
+	}
+
+	err = b.sheetsService.UpdateUsersSheet(googleUsers)
+	if err != nil {
+		log.Printf("Failed to sync users to Google Sheets: %v", err)
+	} else {
+		log.Println("Users successfully synced to Google Sheets")
+	}
+}
+
+// SyncBookingsToSheets синхронизирует бронирования с Google Sheets
+func (b *Bot) SyncBookingsToSheets() {
+	if b.sheetsService == nil {
+		return
+	}
+
+	// Вам нужно будет создать этот метод в database
+	bookings, err := b.db.GetBookingsByDateRange(context.Background(), time.Now().AddDate(0, 0, -14), time.Now()) // Последние 2 недели
+	if err != nil {
+		log.Printf("Failed to get bookings for Google Sheets sync: %v", err)
+		return
+	}
+
+	// Конвертируем в google.Booking
+	var googleBookings []*models.Booking
+	for _, booking := range bookings {
+		googleBookings = append(googleBookings, &models.Booking{
+			ID:        booking.ID,
+			UserID:    booking.UserID,
+			ItemID:    booking.ItemID,
+			Date:      booking.Date,
+			Status:    booking.Status,
+			UserName:  booking.UserName,
+			Phone:     booking.Phone,
+			ItemName:  booking.ItemName,
+			CreatedAt: booking.CreatedAt,
+			UpdatedAt: booking.UpdatedAt,
+		})
+	}
+
+	err = b.sheetsService.UpdateBookingsSheet(googleBookings)
+	if err != nil {
+		log.Printf("Failed to sync bookings to Google Sheets: %v", err)
+	} else {
+		log.Println("Bookings successfully synced to Google Sheets")
+	}
+}
+
+// AppendBookingToSheets добавляет одно бронирование в Google Sheets
+func (b *Bot) AppendBookingToSheets(booking *models.Booking) {
+	if b.sheetsService == nil {
+		return
+	}
+
+	googleBooking := &models.Booking{
+		ID:        booking.ID,
+		UserID:    booking.UserID,
+		ItemID:    booking.ItemID,
+		Date:      booking.Date,
+		Status:    booking.Status,
+		UserName:  booking.UserName,
+		Phone:     booking.Phone,
+		ItemName:  booking.ItemName,
+		CreatedAt: booking.CreatedAt,
+		UpdatedAt: booking.UpdatedAt,
+	}
+
+	err := b.sheetsService.AppendBooking(googleBooking)
+	if err != nil {
+		log.Printf("Failed to append booking to Google Sheets: %v", err)
+	} else {
+		log.Printf("Booking %d appended to Google Sheets", booking.ID)
 	}
 }
