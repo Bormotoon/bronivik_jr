@@ -93,6 +93,7 @@ func (b *Bot) handleMainMenu(update tgbotapi.Update) {
 		rows = append(rows, tgbotapi.NewKeyboardButtonRow(
 			tgbotapi.NewKeyboardButton("🔄 Синхронизировать пользователей (Google Sheets)"),
 			tgbotapi.NewKeyboardButton("🔄 Синхронизировать бронирования (Google Sheets)"),
+			tgbotapi.NewKeyboardButton("📅 Синхронизировать расписание (Google Sheets)"),
 		))
 	}
 

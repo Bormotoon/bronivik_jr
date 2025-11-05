@@ -75,6 +75,10 @@ func (b *Bot) handleManagerCommand(update tgbotapi.Update) bool {
 	case text == "🔄 Синхронизировать бронирования (Google Sheets)":
 		b.SyncBookingsToSheets()
 		b.sendMessage(update.Message.Chat.ID, "✅ Бронирования синхронизированы с Google Таблицей")
+
+	case text == "📅 Синхронизировать расписание (Google Sheets)":
+		b.SyncScheduleToSheets()
+		b.sendMessage(update.Message.Chat.ID, "✅ Расписание синхронизировано с Google Таблицей")
 	}
 
 	return false
@@ -603,4 +607,61 @@ func (b *Bot) handleExportRange(update tgbotapi.Update) {
 	}
 
 	b.sendMessage(update.Message.Chat.ID, "✅ Файл экспорта успешно отправлен")
+}
+
+// SyncScheduleToSheets синхронизирует расписание в формате таблицы с Google Sheets
+func (b *Bot) SyncScheduleToSheets() {
+	if b.sheetsService == nil {
+		return
+	}
+
+	// Определяем период (например, текущая неделя)
+	startDate := time.Now().Truncate(24 * time.Hour)
+	endDate := startDate.AddDate(0, 0, 6) // +6 дней = неделя
+
+	// Получаем данные о бронированиях
+	dailyBookings, err := b.db.GetDailyBookings(context.Background(), startDate, endDate)
+	if err != nil {
+		log.Printf("Failed to get daily bookings for schedule sync: %v", err)
+		return
+	}
+
+	// Конвертируем модели в google-модели
+	googleDailyBookings := make(map[string][]models.Booking)
+	for date, bookings := range dailyBookings {
+		var googleBookings []models.Booking
+		for _, booking := range bookings {
+			googleBookings = append(googleBookings, models.Booking{
+				ID:        booking.ID,
+				UserID:    booking.UserID,
+				ItemID:    booking.ItemID,
+				Date:      booking.Date,
+				Status:    booking.Status,
+				UserName:  booking.UserName,
+				Phone:     booking.Phone,
+				ItemName:  booking.ItemName,
+				CreatedAt: booking.CreatedAt,
+				UpdatedAt: booking.UpdatedAt,
+			})
+		}
+		googleDailyBookings[date] = googleBookings
+	}
+
+	// Конвертируем items
+	var googleItems []models.Item
+	for _, item := range b.items {
+		googleItems = append(googleItems, models.Item{
+			ID:            item.ID,
+			Name:          item.Name,
+			TotalQuantity: item.TotalQuantity,
+		})
+	}
+
+	// Обновляем расписание в Google Sheets
+	err = b.sheetsService.UpdateScheduleSheet(startDate, endDate, googleDailyBookings, googleItems)
+	if err != nil {
+		log.Printf("Failed to sync schedule to Google Sheets: %v", err)
+	} else {
+		log.Println("Schedule successfully synced to Google Sheets")
+	}
 }

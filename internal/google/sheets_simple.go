@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"time"
 
 	"bronivik/internal/models"
 	"golang.org/x/oauth2/google"
@@ -182,4 +183,331 @@ func (s *SheetsService) UpdateBookingsSheet(bookings []*models.Booking) error {
 		Do()
 
 	return err
+}
+
+// UpdateScheduleSheet обновляет лист с расписанием бронирований в формате таблицы
+func (s *SheetsService) UpdateScheduleSheet(startDate, endDate time.Time, dailyBookings map[string][]models.Booking, items []models.Item) error {
+	// Получаем ID листа "Бронирования"
+	sheetId, err := s.GetSheetIdByName(s.bookingsSheetID, "Бронирования")
+	if err != nil {
+		return fmt.Errorf("unable to get sheet ID: %v", err)
+	}
+
+	// Очищаем весь лист "Бронирования"
+	clearRange := "Бронирования!A:Z"
+	_, err = s.service.Spreadsheets.Values.Clear(s.bookingsSheetID, clearRange, &sheets.ClearValuesRequest{}).Do()
+	if err != nil {
+		return fmt.Errorf("unable to clear sheet: %v", err)
+	}
+
+	var data [][]interface{}
+	var formatRequests []*sheets.Request
+
+	// Заголовок периода (строка 1)
+	data = append(data, []interface{}{
+		fmt.Sprintf("Период: %s - %s",
+			startDate.Format("02.01.2006"),
+			endDate.Format("02.01.2006")),
+	})
+
+	// Форматирование заголовка периода
+	formatRequests = append(formatRequests, &sheets.Request{
+		RepeatCell: &sheets.RepeatCellRequest{
+			Range: &sheets.GridRange{
+				SheetId:          sheetId, // ИСПРАВЛЕНО: используем правильный sheetId
+				StartRowIndex:    0,
+				EndRowIndex:      1,
+				StartColumnIndex: 0,
+				EndColumnIndex:   1,
+			},
+			Cell: &sheets.CellData{
+				UserEnteredFormat: &sheets.CellFormat{
+					HorizontalAlignment: "CENTER",
+					TextFormat: &sheets.TextFormat{
+						Bold:     true,
+						FontSize: 14,
+					},
+				},
+			},
+			Fields: "userEnteredFormat(textFormat,horizontalAlignment)",
+		},
+	})
+
+	// Объединяем ячейки для заголовка периода
+	dateCount := int(endDate.Sub(startDate).Hours()/24) + 1
+	formatRequests = append(formatRequests, &sheets.Request{
+		MergeCells: &sheets.MergeCellsRequest{
+			Range: &sheets.GridRange{
+				SheetId:          sheetId, // ИСПРАВЛЕНО
+				StartRowIndex:    0,
+				EndRowIndex:      1,
+				StartColumnIndex: 0,
+				EndColumnIndex:   int64(dateCount + 1),
+			},
+			MergeType: "MERGE_ALL",
+		},
+	})
+
+	// Пустая строка между заголовком и таблицей
+	data = append(data, []interface{}{})
+
+	// Заголовки дат (строка 3)
+	dateHeaders := make(map[string]int)
+	headerRow := []interface{}{""}
+
+	col := 1
+	currentDate := startDate
+	for !currentDate.After(endDate) {
+		dateStr := currentDate.Format("02.01")
+		headerRow = append(headerRow, dateStr)
+		dateHeaders[currentDate.Format("2006-01-02")] = col
+		col++
+		currentDate = currentDate.AddDate(0, 0, 1)
+	}
+	data = append(data, headerRow)
+
+	// Форматирование заголовков дат
+	if len(headerRow) > 1 {
+		formatRequests = append(formatRequests, &sheets.Request{
+			RepeatCell: &sheets.RepeatCellRequest{
+				Range: &sheets.GridRange{
+					SheetId:          sheetId, // ИСПРАВЛЕНО
+					StartRowIndex:    2,
+					EndRowIndex:      3,
+					StartColumnIndex: 1,
+					EndColumnIndex:   int64(len(headerRow)),
+				},
+				Cell: &sheets.CellData{
+					UserEnteredFormat: &sheets.CellFormat{
+						HorizontalAlignment: "CENTER",
+						TextFormat: &sheets.TextFormat{
+							Bold: true,
+						},
+						BackgroundColor: &sheets.Color{
+							Red:   0.86,
+							Green: 0.92,
+							Blue:  0.97,
+						},
+					},
+				},
+				Fields: "userEnteredFormat(backgroundColor,textFormat,horizontalAlignment)",
+			},
+		})
+	}
+
+	// Данные по аппаратам
+	for rowIndex, item := range items {
+		rowData := []interface{}{fmt.Sprintf("%s (%d)", item.Name, item.TotalQuantity)}
+
+		currentDate = startDate
+		for colIndex := 0; colIndex < len(dateHeaders); colIndex++ {
+			dateKey := currentDate.Format("2006-01-02")
+			bookings := dailyBookings[dateKey]
+
+			var itemBookings []models.Booking
+			for _, booking := range bookings {
+				if booking.ItemID == item.ID {
+					itemBookings = append(itemBookings, booking)
+				}
+			}
+
+			cellValue := ""
+			var backgroundColor *sheets.Color
+			var hasUnconfirmed bool
+
+			if len(itemBookings) > 0 {
+				for _, booking := range itemBookings {
+					status := "❓"
+					if booking.Status == "confirmed" {
+						status = "✅"
+					} else if booking.Status == "pending" || booking.Status == "changed" {
+						status = "⏳"
+						hasUnconfirmed = true
+					}
+
+					cellValue += fmt.Sprintf("[№%d] %s %s (%s)\n",
+						booking.ID, status, booking.UserName, booking.Phone)
+				}
+
+				bookedCount := len(itemBookings)
+				cellValue += fmt.Sprintf("\nЗанято: %d/%d", bookedCount, item.TotalQuantity)
+
+				// ОПРЕДЕЛЯЕМ ЦВЕТ
+				if hasUnconfirmed {
+					// Желтый - есть неподтвержденные заявки
+					backgroundColor = &sheets.Color{
+						Red:   1.0,
+						Green: 0.92,
+						Blue:  0.61,
+					}
+				} else {
+					// Зеленый - все заявки подтверждены
+					backgroundColor = &sheets.Color{
+						Red:   0.78,
+						Green: 0.94,
+						Blue:  0.81,
+					}
+				}
+			} else {
+				// Нет заявок - свободно (зеленый)
+				cellValue = "Свободно\n\nДоступно: " + fmt.Sprintf("%d/%d", item.TotalQuantity, item.TotalQuantity)
+				backgroundColor = &sheets.Color{
+					Red:   0.78,
+					Green: 0.94,
+					Blue:  0.81,
+				}
+			}
+
+			rowData = append(rowData, cellValue)
+
+			// Добавляем запрос на форматирование для этой ячейки
+			if backgroundColor != nil {
+				formatRequests = append(formatRequests, &sheets.Request{
+					RepeatCell: &sheets.RepeatCellRequest{
+						Range: &sheets.GridRange{
+							SheetId:          sheetId, // ИСПРАВЛЕНО
+							StartRowIndex:    int64(rowIndex + 3),
+							EndRowIndex:      int64(rowIndex + 4),
+							StartColumnIndex: int64(colIndex + 1),
+							EndColumnIndex:   int64(colIndex + 2),
+						},
+						Cell: &sheets.CellData{
+							UserEnteredFormat: &sheets.CellFormat{
+								BackgroundColor:   backgroundColor,
+								VerticalAlignment: "TOP",
+								WrapStrategy:      "WRAP",
+							},
+						},
+						Fields: "userEnteredFormat(backgroundColor,verticalAlignment,wrapStrategy)",
+					},
+				})
+			}
+
+			currentDate = currentDate.AddDate(0, 0, 1)
+		}
+		data = append(data, rowData)
+	}
+
+	// Форматирование названий аппаратов
+	if len(items) > 0 {
+		formatRequests = append(formatRequests, &sheets.Request{
+			RepeatCell: &sheets.RepeatCellRequest{
+				Range: &sheets.GridRange{
+					SheetId:          sheetId, // ИСПРАВЛЕНО
+					StartRowIndex:    3,
+					EndRowIndex:      int64(3 + len(items)),
+					StartColumnIndex: 0,
+					EndColumnIndex:   1,
+				},
+				Cell: &sheets.CellData{
+					UserEnteredFormat: &sheets.CellFormat{
+						TextFormat: &sheets.TextFormat{
+							Bold: true,
+						},
+						BackgroundColor: &sheets.Color{
+							Red:   0.89,
+							Green: 0.94,
+							Blue:  0.85,
+						},
+					},
+				},
+				Fields: "userEnteredFormat(backgroundColor,textFormat)",
+			},
+		})
+	}
+
+	// Записываем данные в лист
+	rangeData := "Бронирования!A1"
+	valueRange := &sheets.ValueRange{
+		Values: data,
+	}
+
+	_, err = s.service.Spreadsheets.Values.Update(s.bookingsSheetID, rangeData, valueRange).
+		ValueInputOption("RAW").
+		Do()
+
+	if err != nil {
+		return fmt.Errorf("unable to update schedule sheet: %v", err)
+	}
+
+	// Применяем все форматирования
+	if len(formatRequests) > 0 {
+		batchUpdateRequest := &sheets.BatchUpdateSpreadsheetRequest{
+			Requests: formatRequests,
+		}
+
+		_, err = s.service.Spreadsheets.BatchUpdate(s.bookingsSheetID, batchUpdateRequest).Do()
+		if err != nil {
+			return fmt.Errorf("unable to apply formatting: %v", err)
+		}
+	}
+
+	// Настраиваем ширину колонок
+	return s.adjustColumnWidths(sheetId, len(dateHeaders))
+}
+
+// adjustColumnWidths настраивает ширину колонок
+func (s *SheetsService) adjustColumnWidths(sheetId int64, dateCount int) error {
+	requests := []*sheets.Request{}
+
+	// Колонка A - названия аппаратов (ширина 200px)
+	requests = append(requests, &sheets.Request{
+		UpdateDimensionProperties: &sheets.UpdateDimensionPropertiesRequest{
+			Range: &sheets.DimensionRange{
+				SheetId:    sheetId, // ИСПРАВЛЕНО
+				Dimension:  "COLUMNS",
+				StartIndex: 0,
+				EndIndex:   1,
+			},
+			Properties: &sheets.DimensionProperties{
+				PixelSize: 200,
+			},
+			Fields: "pixelSize",
+		},
+	})
+
+	// Колонки с датами (ширина 150px)
+	if dateCount > 0 {
+		requests = append(requests, &sheets.Request{
+			UpdateDimensionProperties: &sheets.UpdateDimensionPropertiesRequest{
+				Range: &sheets.DimensionRange{
+					SheetId:    sheetId, // ИСПРАВЛЕНО
+					Dimension:  "COLUMNS",
+					StartIndex: 1,
+					EndIndex:   int64(1 + dateCount),
+				},
+				Properties: &sheets.DimensionProperties{
+					PixelSize: 150,
+				},
+				Fields: "pixelSize",
+			},
+		})
+	}
+
+	if len(requests) > 0 {
+		batchUpdateRequest := &sheets.BatchUpdateSpreadsheetRequest{
+			Requests: requests,
+		}
+
+		_, err := s.service.Spreadsheets.BatchUpdate(s.bookingsSheetID, batchUpdateRequest).Do()
+		return err
+	}
+
+	return nil
+}
+
+// GetSheetIdByName возвращает ID листа по его названию
+func (s *SheetsService) GetSheetIdByName(spreadID, sheetName string) (int64, error) {
+	spreadsheet, err := s.service.Spreadsheets.Get(spreadID).Do()
+	if err != nil {
+		return 0, fmt.Errorf("unable to get spreadsheet: %v", err)
+	}
+
+	for _, sheet := range spreadsheet.Sheets {
+		if sheet.Properties.Title == sheetName {
+			return sheet.Properties.SheetId, nil
+		}
+	}
+
+	return 0, fmt.Errorf("sheet '%s' not found", sheetName)
 }
