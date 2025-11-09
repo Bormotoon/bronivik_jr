@@ -12,6 +12,7 @@ type Booking struct {
 	ItemName     string    `json:"item_name"`
 	Date         time.Time `json:"date"`
 	Status       string    `json:"status"` // pending, confirmed, cancelled, changed, completed
+	Comment      string    `json:"comment"`
 	CreatedAt    time.Time `json:"created_at"`
 	UpdatedAt    time.Time `json:"updated_at"`
 }

@@ -66,33 +66,32 @@ func (b *Bot) handleMainMenu(update tgbotapi.Update) {
 	var rows [][]tgbotapi.KeyboardButton
 
 	// Основные кнопки для всех пользователей
-	rows = append(rows, tgbotapi.NewKeyboardButtonRow(
-		tgbotapi.NewKeyboardButton("📅 Посмотреть расписание"),
-		tgbotapi.NewKeyboardButton("💼 Доступные позиции"),
-	))
+	if !b.isManager(update.Message.From.ID) {
+		rows = append(rows, tgbotapi.NewKeyboardButtonRow(
+			tgbotapi.NewKeyboardButton("📅 Посмотреть расписание"),
+			tgbotapi.NewKeyboardButton("💼 Доступные позиции"),
+		))
 
-	rows = append(rows, tgbotapi.NewKeyboardButtonRow(
-		tgbotapi.NewKeyboardButton("📋 Создать заявку"),
-		tgbotapi.NewKeyboardButton("📞 Контакты менеджеров"),
-	))
+		rows = append(rows, tgbotapi.NewKeyboardButtonRow(
+			tgbotapi.NewKeyboardButton("📋 Создать заявку"),
+			tgbotapi.NewKeyboardButton("📞 Контакты менеджеров"),
+		))
 
-	rows = append(rows, tgbotapi.NewKeyboardButtonRow(
-		tgbotapi.NewKeyboardButton("📊 Мои заявки"),
-	))
+		rows = append(rows, tgbotapi.NewKeyboardButtonRow(
+			tgbotapi.NewKeyboardButton("📊 Мои заявки"),
+		))
+	}
 
 	// Кнопки только для менеджеров
 	if b.isManager(update.Message.From.ID) {
 		rows = append(rows, tgbotapi.NewKeyboardButtonRow(
 			tgbotapi.NewKeyboardButton("👨‍💼 Все заявки"),
-			tgbotapi.NewKeyboardButton("📊 Доступность"),
 		))
 		rows = append(rows, tgbotapi.NewKeyboardButtonRow(
-			tgbotapi.NewKeyboardButton("💾 Экспорт недели"),
 			tgbotapi.NewKeyboardButton("➕ Создать заявку (Менеджер)"),
 		))
 		rows = append(rows, tgbotapi.NewKeyboardButtonRow(
-			tgbotapi.NewKeyboardButton("🔄 Синхронизировать пользователей (Google Sheets)"),
-			tgbotapi.NewKeyboardButton("🔄 Синхронизировать бронирования (Google Sheets)"),
+			tgbotapi.NewKeyboardButton("🔄 Синхронизировать список заявок (Google Sheets)"),
 			tgbotapi.NewKeyboardButton("📅 Синхронизировать расписание (Google Sheets)"),
 		))
 	}
@@ -223,11 +222,13 @@ func (b *Bot) handleNameRequest(update tgbotapi.Update) {
 // Обновляем handlePhoneRequest - добавляем контакты
 func (b *Bot) handlePhoneRequest(update tgbotapi.Update) {
 	msg := tgbotapi.NewMessage(update.Message.Chat.ID,
-		"Пожалуйста, предоставьте ваш номер телефона для связи:")
+		"Пожалуйста, предоставьте ваш номер телефона для связи:\n"+
+			"Вы можете предоставить разрешение на использование номера из контакта телеграмм\n"+
+			"Либо введите номер телефона для связи")
 
 	keyboard := tgbotapi.NewReplyKeyboard(
 		tgbotapi.NewKeyboardButtonRow(
-			tgbotapi.NewKeyboardButtonContact("📱 Отправить номер телефона"),
+			tgbotapi.NewKeyboardButtonContact("📱 Отправить номер телефона из вашего контакта в телеграмм"),
 		),
 		tgbotapi.NewKeyboardButtonRow(
 			tgbotapi.NewKeyboardButton("📞 Контакты менеджеров"),
@@ -368,65 +369,139 @@ func (b *Bot) handleViewSchedule(update tgbotapi.Update) {
 }
 
 // handleSelectItem - выбор позиции для бронирования
-func (b *Bot) handleSelectItem(update tgbotapi.Update) {
-	msg := tgbotapi.NewMessage(update.Message.Chat.ID,
-		"Выберите позицию для бронирования:")
+// func (b *Bot) handleSelectItem(update tgbotapi.Update) {
+// 	msg := tgbotapi.NewMessage(update.Message.Chat.ID,
+// 		"Выберите позицию для бронирования:")
+//
+// 	var keyboardRows [][]tgbotapi.KeyboardButton
+// 	for _, item := range b.items {
+// 		row := tgbotapi.NewKeyboardButtonRow(
+// 			tgbotapi.NewKeyboardButton(fmt.Sprintf("🏢 %s", item.Name)),
+// 		)
+// 		keyboardRows = append(keyboardRows, row)
+// 	}
+//
+// 	keyboardRows = append(keyboardRows, tgbotapi.NewKeyboardButtonRow(
+// 		tgbotapi.NewKeyboardButton("⬅️ Назад"),
+// 	))
+//
+// 	msg.ReplyMarkup = tgbotapi.NewReplyKeyboard(keyboardRows...)
+// 	b.setUserState(update.Message.From.ID, StateSelectItem, nil)
+// 	b.bot.Send(msg)
+// }
 
-	var keyboardRows [][]tgbotapi.KeyboardButton
-	for _, item := range b.items {
-		row := tgbotapi.NewKeyboardButtonRow(
-			tgbotapi.NewKeyboardButton(fmt.Sprintf("🏢 %s", item.Name)),
-		)
-		keyboardRows = append(keyboardRows, row)
+func (b *Bot) handleSelectItem(update tgbotapi.Update) {
+	chatID := update.Message.Chat.ID
+	userID := update.Message.From.ID
+
+	// Сохраняем состояние
+	b.setUserState(userID, StateSelectItem, map[string]interface{}{
+		"page": 0,
+	})
+
+	// Отправляем первую страницу
+	b.sendItemsPage(chatID, userID, 0)
+}
+
+// sendItemsPage отправляет страницу с аппаратами
+func (b *Bot) sendItemsPage(chatID, userID int64, page int) {
+	itemsPerPage := 8 // Количество аппаратов на странице
+	startIdx := page * itemsPerPage
+	endIdx := startIdx + itemsPerPage
+	if endIdx > len(b.items) {
+		endIdx = len(b.items)
 	}
 
-	keyboardRows = append(keyboardRows, tgbotapi.NewKeyboardButtonRow(
-		tgbotapi.NewKeyboardButton("⬅️ Назад"),
-	))
+	var message strings.Builder
+	message.WriteString("🏢 *Доступные аппараты*\n\n")
+	message.WriteString(fmt.Sprintf("Страница %d из %d\n\n", page+1, (len(b.items)+itemsPerPage-1)/itemsPerPage))
 
-	msg.ReplyMarkup = tgbotapi.NewReplyKeyboard(keyboardRows...)
-	b.setUserState(update.Message.From.ID, StateSelectItem, nil)
+	// Текущие аппараты на странице
+	currentItems := b.items[startIdx:endIdx]
+	for i, item := range currentItems {
+		message.WriteString(fmt.Sprintf("%d. *%s*\n", startIdx+i+1, item.Name))
+		message.WriteString(fmt.Sprintf("   📝 %s\n", item.Description))
+	}
+
+	// Создаем Inline-клавиатуру
+	var keyboard [][]tgbotapi.InlineKeyboardButton
+
+	// Кнопки выбора аппаратов
+	for i, item := range currentItems {
+		btn := tgbotapi.NewInlineKeyboardButtonData(
+			fmt.Sprintf("%d. %s", startIdx+i+1, item.Name),
+			fmt.Sprintf("select_item:%d", item.ID),
+		)
+		keyboard = append(keyboard, []tgbotapi.InlineKeyboardButton{btn})
+	}
+
+	// Кнопки навигации
+	var navButtons []tgbotapi.InlineKeyboardButton
+
+	if page > 0 {
+		navButtons = append(navButtons, tgbotapi.NewInlineKeyboardButtonData("⬅️ Назад", fmt.Sprintf("items_page:%d", page-1)))
+	}
+
+	if endIdx < len(b.items) {
+		navButtons = append(navButtons, tgbotapi.NewInlineKeyboardButtonData("Вперед ➡️", fmt.Sprintf("items_page:%d", page+1)))
+	}
+
+	if len(navButtons) > 0 {
+		keyboard = append(keyboard, navButtons)
+	}
+
+	// Кнопка возврата
+	keyboard = append(keyboard, []tgbotapi.InlineKeyboardButton{
+		tgbotapi.NewInlineKeyboardButtonData("⬅️ Назад в меню", "back_to_main"),
+	})
+
+	markup := tgbotapi.NewInlineKeyboardMarkup(keyboard...)
+
+	msg := tgbotapi.NewMessage(chatID, message.String())
+	msg.ReplyMarkup = &markup
+	msg.ParseMode = "Markdown"
+
 	b.bot.Send(msg)
 }
 
 // handleItemSelection - обработка выбора конкретной позиции
-func (b *Bot) handleItemSelection(update tgbotapi.Update, itemName string) {
-	b.debugState(update.Message.From.ID, "handleItemSelection START")
-
-	var selectedItem models.Item
-	for _, item := range b.items {
-		if item.Name == itemName {
-			selectedItem = item
-			break
-		}
-	}
-
-	if selectedItem.ID == 0 {
-		b.sendMessage(update.Message.Chat.ID, "Позиция не найдена")
-		return
-	}
-
-	// Сохраняем выбранный элемент в состоянии
-	tempData := map[string]interface{}{
-		"selected_item": selectedItem,
-	}
-
-	b.setUserState(update.Message.From.ID, "waiting_date", tempData)
-
-	b.debugState(update.Message.From.ID, "handleItemSelection END")
-
-	msg := tgbotapi.NewMessage(update.Message.Chat.ID,
-		fmt.Sprintf("Вы выбрали: %s\n%s\n\nВыберите дату бронирования (формат: ДД.ММ.ГГГГ):",
-			selectedItem.Name, selectedItem.Description))
-
-	keyboardRows := tgbotapi.NewKeyboardButtonRow(
-		tgbotapi.NewKeyboardButton("⬅️ Назад"),
-	)
-
-	msg.ReplyMarkup = tgbotapi.NewReplyKeyboard(keyboardRows)
-
-	b.bot.Send(msg)
-}
+// func (b *Bot) handleItemSelection(update tgbotapi.Update, itemName string) {
+// 	b.debugState(update.Message.From.ID, "handleItemSelection START")
+//
+// 	var selectedItem models.Item
+// 	for _, item := range b.items {
+// 		if item.Name == itemName {
+// 			selectedItem = item
+// 			break
+// 		}
+// 	}
+//
+// 	if selectedItem.ID == 0 {
+// 		b.sendMessage(update.Message.Chat.ID, "Позиция не найдена")
+// 		return
+// 	}
+//
+// 	// Сохраняем выбранный элемент в состоянии
+// 	tempData := map[string]interface{}{
+// 		"selected_item": selectedItem,
+// 	}
+//
+// 	b.setUserState(update.Message.From.ID, "waiting_date", tempData)
+//
+// 	b.debugState(update.Message.From.ID, "handleItemSelection END")
+//
+// 	msg := tgbotapi.NewMessage(update.Message.Chat.ID,
+// 		fmt.Sprintf("Вы выбрали: %s\n%s\n\nВыберите дату бронирования (формат: ДД.ММ.ГГГГ):",
+// 			selectedItem.Name, selectedItem.Description))
+//
+// 	keyboardRows := tgbotapi.NewKeyboardButtonRow(
+// 		tgbotapi.NewKeyboardButton("⬅️ Назад"),
+// 	)
+//
+// 	msg.ReplyMarkup = tgbotapi.NewReplyKeyboard(keyboardRows)
+//
+// 	b.bot.Send(msg)
+// }
 
 // showAvailableItems показывает доступные позиции
 func (b *Bot) showAvailableItems(update tgbotapi.Update) {
@@ -608,117 +683,6 @@ func (b *Bot) handleSpecificDateInput(update tgbotapi.Update, dateStr string) {
 	b.handleMainMenu(update)
 }
 
-// handleExport обработка команды экспорта для менеджеров
-// func (b *Bot) handleExport(update tgbotapi.Update) {
-// 	if !b.isManager(update.Message.From.ID) { // Исправлено: убрано преобразование int64
-// 		return
-// 	}
-//
-// 	parts := strings.Fields(update.Message.Text)
-// 	if len(parts) != 3 {
-// 		b.sendMessage(update.Message.Chat.ID, "Использование: /export ГГГГ-ММ-ДД ГГГГ-ММ-ДД\nНапример: /export 2024-01-01 2024-01-31")
-// 		return
-// 	}
-//
-// 	startDate, err1 := time.Parse("2006-01-02", parts[1])
-// 	endDate, err2 := time.Parse("2006-01-02", parts[2])
-//
-// 	if err1 != nil || err2 != nil {
-// 		b.sendMessage(update.Message.Chat.ID, "Неверный формат даты. Используйте: ГГГГ-ММ-ДД")
-// 		return
-// 	}
-//
-// 	bookings, err := b.db.GetBookingsByDateRange(context.Background(), startDate, endDate)
-// 	if err != nil {
-// 		log.Printf("Error getting bookings: %v", err)
-// 		b.sendMessage(update.Message.Chat.ID, "Ошибка при получении данных")
-// 		return
-// 	}
-//
-// 	// Создаем простой текстовый отчет (в реальном приложении - CSV)
-// 	var report strings.Builder
-// 	report.WriteString(fmt.Sprintf("Отчет по бронированиям с %s по %s\n\n",
-// 		startDate.Format("02.01.2006"), endDate.Format("02.01.2006")))
-//
-// 	for _, booking := range bookings {
-// 		report.WriteString(fmt.Sprintf("ID: %d\n", booking.ID))
-// 		report.WriteString(fmt.Sprintf("Позиция: %s\n", booking.ItemName))
-// 		report.WriteString(fmt.Sprintf("Дата: %s\n", booking.Date.Format("02.01.2006")))
-// 		report.WriteString(fmt.Sprintf("Клиент: %s\n", booking.UserName))
-// 		report.WriteString(fmt.Sprintf("Телефон: %s\n", booking.Phone))
-// 		report.WriteString(fmt.Sprintf("Статус: %s\n", booking.Status))
-// 		report.WriteString("---\n")
-// 	}
-//
-// 	if len(bookings) == 0 {
-// 		report.WriteString("Бронирований не найдено")
-// 	}
-//
-// 	b.sendMessage(update.Message.Chat.ID, report.String())
-// }
-
-// confirmBooking подтверждение бронирования менеджером
-func (b *Bot) confirmBooking(booking *models.Booking, managerChatID int64) {
-	err := b.db.UpdateBookingStatus(context.Background(), booking.ID, "confirmed")
-	if err != nil {
-		log.Printf("Error confirming booking: %v", err)
-		return
-	}
-
-	// Уведомляем пользователя
-	userMsg := tgbotapi.NewMessage(booking.UserID,
-		fmt.Sprintf("✅ Ваша заявка на %s подтверждена! Ждем вас %s.",
-			booking.ItemName, booking.Date.Format("02.01.2006")))
-	b.bot.Send(userMsg)
-
-	// Уведомляем менеджера
-	managerMsg := tgbotapi.NewMessage(managerChatID, "✅ Бронирование подтверждено")
-	b.bot.Send(managerMsg)
-}
-
-// rejectBooking отклонение бронирования менеджером
-func (b *Bot) rejectBooking(booking *models.Booking, managerChatID int64) {
-	err := b.db.UpdateBookingStatus(context.Background(), booking.ID, "cancelled")
-	if err != nil {
-		log.Printf("Error rejecting booking: %v", err)
-		return
-	}
-
-	// Уведомляем пользователя
-	userMsg := tgbotapi.NewMessage(booking.UserID,
-		"❌ К сожалению, ваша заявка была отклонена менеджером.")
-	b.bot.Send(userMsg)
-
-	managerMsg := tgbotapi.NewMessage(managerChatID, "❌ Бронирование отменено")
-	b.bot.Send(managerMsg)
-}
-
-// rescheduleBooking предложение выбрать другую дату
-func (b *Bot) rescheduleBooking(booking *models.Booking, managerChatID int64) {
-	// Отправляем пользователю сообщение с предложением выбрать другую дату
-	userMsg := tgbotapi.NewMessage(booking.UserID,
-		fmt.Sprintf("🔄 Менеджер предложил выбрать другую дату для %s. Пожалуйста, создайте новую заявку.",
-			booking.ItemName))
-
-	keyboard := tgbotapi.NewReplyKeyboard(
-		tgbotapi.NewKeyboardButtonRow(
-			tgbotapi.NewKeyboardButton("📋 Создать заявку"),
-		),
-	)
-	userMsg.ReplyMarkup = keyboard
-
-	b.bot.Send(userMsg)
-
-	// Обновляем статус текущей заявки
-	err := b.db.UpdateBookingStatus(context.Background(), booking.ID, "rescheduled")
-	if err != nil {
-		log.Printf("Error updating booking status: %v", err)
-	}
-
-	managerMsg := tgbotapi.NewMessage(managerChatID, "🔄 Пользователю предложено выбрать другую дату")
-	b.bot.Send(managerMsg)
-}
-
 // Добавьте этот метод в utils.go для отладки
 func (b *Bot) debugState(userID int64, message string) {
 	state := b.getUserState(userID)
@@ -833,37 +797,4 @@ func (b *Bot) normalizePhone(phone string) string {
 	}
 
 	return "" // Неверный формат
-}
-
-// notifyManagers уведомление менеджеров о новой заявке
-func (b *Bot) notifyManagers(booking models.Booking) {
-	message := fmt.Sprintf(`🆕 Новая заявка на бронирование:
-
-🏢 Позиция: %s
-📅 Дата: %s
-👤 Клиент: %s
-📱 Телефон: %s
-🆔 ID заявки: %d`,
-		booking.ItemName,
-		booking.Date.Format("02.01.2006"),
-		booking.UserName,
-		booking.Phone,
-		booking.ID)
-
-	for _, managerID := range b.config.Managers {
-		msg := tgbotapi.NewMessage(managerID, message)
-
-		keyboard := tgbotapi.NewInlineKeyboardMarkup(
-			tgbotapi.NewInlineKeyboardRow(
-				tgbotapi.NewInlineKeyboardButtonData("✅ Подтвердить", fmt.Sprintf("confirm_%d", booking.ID)),
-				tgbotapi.NewInlineKeyboardButtonData("❌ Отклонить", fmt.Sprintf("reject_%d", booking.ID)),
-			),
-			tgbotapi.NewInlineKeyboardRow(
-				tgbotapi.NewInlineKeyboardButtonData("🔄 Предложить другой выбор", fmt.Sprintf("reschedule_%d", booking.ID)),
-			),
-		)
-		msg.ReplyMarkup = &keyboard
-
-		b.bot.Send(msg)
-	}
 }

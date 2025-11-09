@@ -72,6 +72,7 @@ func createTables(db *sql.DB) error {
             item_name TEXT NOT NULL,
             date DATETIME NOT NULL,
             status TEXT NOT NULL DEFAULT 'pending',
+            comment TEXT,
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
             updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
         )`,
@@ -151,8 +152,9 @@ func (db *DB) GetBookedCount(ctx context.Context, itemID int64, date time.Time) 
 // CreateBooking создает новое бронирование
 func (db *DB) CreateBooking(ctx context.Context, booking *models.Booking) error {
 	query := `
-        INSERT INTO bookings (user_id, user_name, user_nickname, phone, item_id, item_name, date, status, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO bookings (user_id, user_name, user_nickname, phone, item_id, item_name, date, status, comment, created_at, updated_at)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+        RETURNING id
     `
 
 	result, err := db.ExecContext(ctx, query,
@@ -164,8 +166,9 @@ func (db *DB) CreateBooking(ctx context.Context, booking *models.Booking) error 
 		booking.ItemName,
 		booking.Date,
 		booking.Status,
+		booking.Comment,
 		booking.CreatedAt,
-		time.Now(), // updated_at
+		booking.UpdatedAt,
 	)
 
 	if err != nil {
@@ -179,6 +182,13 @@ func (db *DB) CreateBooking(ctx context.Context, booking *models.Booking) error 
 
 	booking.ID = id
 	return nil
+}
+
+// UpdateBookingComment обновляет комментарий заявки
+func (db *DB) UpdateBookingComment(ctx context.Context, bookingID int64, comment string) error {
+	query := `UPDATE bookings SET comment = $1, updated_at = $2 WHERE id = $3`
+	_, err := db.ExecContext(ctx, query, comment, time.Now(), bookingID)
+	return err
 }
 
 // GetBooking возвращает бронирование по ID
