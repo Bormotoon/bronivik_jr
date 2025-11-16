@@ -69,10 +69,6 @@ func (b *Bot) handleManagerCommand(update tgbotapi.Update) bool {
 		b.sendMessage(update.Message.Chat.ID, "❌ Создание заявки отменено")
 		b.handleMainMenu(update)
 
-	// case text == "🔄 Синхронизировать пользователей (Google Sheets)":
-	// 	b.SyncUsersToSheets()
-	// 	b.sendMessage(update.Message.Chat.ID, "✅ Пользователи синхронизированы с Google Таблицей")
-
 	case text == "🔄 Синхронизировать бронирования (Google Sheets)":
 		b.SyncBookingsToSheets()
 		b.sendMessage(update.Message.Chat.ID, "✅ Бронирования синхронизированы с Google Таблицей")
@@ -471,9 +467,9 @@ func (b *Bot) showManagerBookings(update tgbotapi.Update) {
 		return
 	}
 
-	// Получаем все заявки за последние 7 дней и на 90 вперед
-	startDate := time.Now().AddDate(0, 0, -7)
-	endDate := time.Now().AddDate(0, 0, 90)
+	// Получаем все заявки за период: один месяц назад и два месяца вперед
+	startDate := time.Now().AddDate(0, -1, 0) // 1 месяц назад
+	endDate := time.Now().AddDate(0, 2, 0)    // 2 месяца вперед
 
 	bookings, err := b.db.GetBookingsByDateRange(context.Background(), startDate, endDate)
 	if err != nil {
@@ -854,9 +850,13 @@ func (b *Bot) SyncScheduleToSheets() {
 		return
 	}
 
-	// Определяем период (например, текущая неделя)
-	startDate := time.Now().Truncate(24 * time.Hour)
-	endDate := startDate.AddDate(0, 0, 6) // +6 дней = неделя
+	// Определяем период: один месяц назад и два месяца вперед
+	startDate := time.Now().AddDate(0, -1, 0).Truncate(24 * time.Hour) // 1 месяц назад
+	endDate := time.Now().AddDate(0, 2, 0).Truncate(24 * time.Hour)    // 2 месяца вперед
+
+	log.Printf("Syncing schedule to Google Sheets from %s to %s",
+		startDate.Format("02.01.2006"),
+		endDate.Format("02.01.2006"))
 
 	// Получаем данные о бронированиях
 	dailyBookings, err := b.db.GetDailyBookings(context.Background(), startDate, endDate)
@@ -902,7 +902,9 @@ func (b *Bot) SyncScheduleToSheets() {
 	if err != nil {
 		log.Printf("Failed to sync schedule to Google Sheets: %v", err)
 	} else {
-		log.Println("Schedule successfully synced to Google Sheets")
+		log.Printf("Schedule successfully synced to Google Sheets for period %s - %s",
+			startDate.Format("02.01.2006"),
+			endDate.Format("02.01.2006"))
 	}
 }
 

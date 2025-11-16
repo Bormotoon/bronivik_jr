@@ -818,9 +818,9 @@ func (b *Bot) SyncBookingsToSheets() {
 		return
 	}
 
-	// Получаем ВСЕ бронирования для полной синхронизации
-	startDate := time.Now().AddDate(0, -1, 0) // За последний месяц
-	endDate := time.Now().AddDate(0, 2, 0)    // +2 месяца вперед
+	// Получаем бронирования за период: один месяц назад и два месяца вперед
+	startDate := time.Now().AddDate(0, -1, 0) // 1 месяц назад
+	endDate := time.Now().AddDate(0, 2, 0)    // 2 месяца вперед
 
 	bookings, err := b.db.GetBookingsByDateRange(context.Background(), startDate, endDate)
 	if err != nil {
