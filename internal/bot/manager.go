@@ -847,12 +847,13 @@ func (b *Bot) completeBooking(booking *models.Booking, managerChatID int64) {
 // SyncScheduleToSheets синхронизирует расписание в формате таблицы с Google Sheets
 func (b *Bot) SyncScheduleToSheets() {
 	if b.sheetsService == nil {
+		log.Println("Google Sheets service not initialized")
 		return
 	}
 
 	// Определяем период: один месяц назад и два месяца вперед
-	startDate := time.Now().AddDate(0, -1, 0).Truncate(24 * time.Hour) // 1 месяц назад
-	endDate := time.Now().AddDate(0, 2, 0).Truncate(24 * time.Hour)    // 2 месяца вперед
+	startDate := time.Now().AddDate(0, -1, 0).Truncate(24 * time.Hour)
+	endDate := time.Now().AddDate(0, 2, 0).Truncate(24 * time.Hour)
 
 	log.Printf("Syncing schedule to Google Sheets from %s to %s",
 		startDate.Format("02.01.2006"),
@@ -865,7 +866,14 @@ func (b *Bot) SyncScheduleToSheets() {
 		return
 	}
 
-	// Конвертируем модели в google-модели
+	// Логируем количество найденных бронирований
+	totalBookings := 0
+	for _, bookings := range dailyBookings {
+		totalBookings += len(bookings)
+	}
+	log.Printf("Found %d bookings across %d dates", totalBookings, len(dailyBookings))
+
+	// Конвертируем модели
 	googleDailyBookings := make(map[string][]models.Booking)
 	for date, bookings := range dailyBookings {
 		var googleBookings []models.Booking
@@ -897,14 +905,14 @@ func (b *Bot) SyncScheduleToSheets() {
 		})
 	}
 
+	log.Printf("Updating Google Sheets with %d items", len(googleItems))
+
 	// Обновляем расписание в Google Sheets
 	err = b.sheetsService.UpdateScheduleSheet(startDate, endDate, googleDailyBookings, googleItems)
 	if err != nil {
 		log.Printf("Failed to sync schedule to Google Sheets: %v", err)
 	} else {
-		log.Printf("Schedule successfully synced to Google Sheets for period %s - %s",
-			startDate.Format("02.01.2006"),
-			endDate.Format("02.01.2006"))
+		log.Printf("Schedule successfully synced to Google Sheets")
 	}
 }
 

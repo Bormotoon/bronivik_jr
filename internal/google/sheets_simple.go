@@ -203,6 +203,12 @@ func (s *SheetsService) UpdateScheduleSheet(startDate, endDate time.Time, dailyB
 	var data [][]interface{}
 	var formatRequests []*sheets.Request
 
+	// Рассчитываем количество дней в периоде
+	days := int(endDate.Sub(startDate).Hours()/24) + 1
+	if days <= 0 {
+		return fmt.Errorf("invalid date range: startDate %s, endDate %s", startDate, endDate)
+	}
+
 	// Заголовок периода (строка 1)
 	data = append(data, []interface{}{
 		fmt.Sprintf("Период: %s - %s",
@@ -233,8 +239,13 @@ func (s *SheetsService) UpdateScheduleSheet(startDate, endDate time.Time, dailyB
 		},
 	})
 
-	// Объединяем ячейки для заголовка периода
-	dateCount := int(endDate.Sub(startDate).Hours()/24) + 1
+	// Объединяем ячейки для заголовка периода - ИСПРАВЛЕННЫЙ КОД
+	// Убедимся, что EndColumnIndex не превышает количество дней + 1 (для названий аппаратов)
+	endColumnIndex := int64(days + 1)
+	if endColumnIndex > 26 { // Ограничим максимальное количество колонок
+		endColumnIndex = 26
+	}
+
 	formatRequests = append(formatRequests, &sheets.Request{
 		MergeCells: &sheets.MergeCellsRequest{
 			Range: &sheets.GridRange{
@@ -242,7 +253,7 @@ func (s *SheetsService) UpdateScheduleSheet(startDate, endDate time.Time, dailyB
 				StartRowIndex:    0,
 				EndRowIndex:      1,
 				StartColumnIndex: 0,
-				EndColumnIndex:   int64(dateCount + 1),
+				EndColumnIndex:   endColumnIndex,
 			},
 			MergeType: "MERGE_ALL",
 		},
@@ -253,17 +264,24 @@ func (s *SheetsService) UpdateScheduleSheet(startDate, endDate time.Time, dailyB
 
 	// Заголовки дат (строка 3)
 	dateHeaders := make(map[string]int)
-	headerRow := []interface{}{""}
+	headerRow := []interface{}{""} // Пустая ячейка для названий аппаратов
 
-	col := 1
 	currentDate := startDate
-	for !currentDate.After(endDate) {
+	dateCols := 0
+	for !currentDate.After(endDate) && dateCols < 100 { // Ограничим 100 колонками
 		dateStr := currentDate.Format("02.01")
 		headerRow = append(headerRow, dateStr)
-		dateHeaders[currentDate.Format("2006-01-02")] = col
-		col++
+		dateHeaders[currentDate.Format("2006-01-02")] = dateCols + 1 // +1 потому что первая колонка для названий
+		dateCols++
 		currentDate = currentDate.AddDate(0, 0, 1)
 	}
+
+	// Если нет дат в периоде, добавляем хотя бы одну колонку
+	if len(headerRow) <= 1 {
+		headerRow = append(headerRow, "Нет данных")
+		dateCols = 1
+	}
+
 	data = append(data, headerRow)
 
 	// Форматирование заголовков дат
@@ -300,7 +318,7 @@ func (s *SheetsService) UpdateScheduleSheet(startDate, endDate time.Time, dailyB
 		rowData := []interface{}{fmt.Sprintf("%s (%d)", item.Name, item.TotalQuantity)}
 
 		currentDate = startDate
-		for colIndex := 0; colIndex < len(dateHeaders); colIndex++ {
+		for colIndex := 0; colIndex < dateCols; colIndex++ {
 			dateKey := currentDate.Format("2006-01-02")
 			bookings := dailyBookings[dateKey]
 
@@ -334,7 +352,6 @@ func (s *SheetsService) UpdateScheduleSheet(startDate, endDate time.Time, dailyB
 					cellValue += fmt.Sprintf("[№%d] %s %s (%s)\n",
 						booking.ID, status, booking.UserName, booking.Phone)
 
-					// Добавляем комментарий если есть
 					if booking.Comment != "" {
 						cellValue += fmt.Sprintf("   💬 %s\n", booking.Comment)
 					}
@@ -342,16 +359,14 @@ func (s *SheetsService) UpdateScheduleSheet(startDate, endDate time.Time, dailyB
 
 				cellValue += fmt.Sprintf("\nЗанято: %d/%d", bookedCount, item.TotalQuantity)
 
-				// НОВАЯ ЛОГИКА ПОДСВЕТКИ:
-				// 1. Если все аппараты заняты - КРАСНЫЙ
+				// Логика подсветки
 				if bookedCount >= int(item.TotalQuantity) {
 					backgroundColor = &sheets.Color{
-						Red:   1.0, // #FFC7CE
+						Red:   1.0,
 						Green: 0.78,
 						Blue:  0.81,
 					}
 				} else {
-					// Проверяем статусы заявок
 					hasUnconfirmed := false
 					for _, booking := range activeBookings {
 						if booking.Status == "pending" || booking.Status == "changed" {
@@ -360,80 +375,71 @@ func (s *SheetsService) UpdateScheduleSheet(startDate, endDate time.Time, dailyB
 						}
 					}
 
-					// 2. Если есть неподтвержденные заявки - ЖЕЛТЫЙ
 					if hasUnconfirmed {
 						backgroundColor = &sheets.Color{
-							Red:   1.0, // #FFEB9C
+							Red:   1.0,
 							Green: 0.92,
 							Blue:  0.61,
 						}
 					} else {
-						// 3. Если все заявки подтверждены - ЗЕЛЕНЫЙ
 						backgroundColor = &sheets.Color{
-							Red:   0.78, // #C6EFCE
+							Red:   0.78,
 							Green: 0.94,
 							Blue:  0.81,
 						}
 					}
 				}
 			} else {
-				// Нет активных заявок - СВОБОДНО (БЕЗ ЗАЛИВКИ)
+				// Нет активных заявок - без заливки
 				cellValue = "Свободно\n\nДоступно: " + fmt.Sprintf("%d/%d", item.TotalQuantity, item.TotalQuantity)
-				// ЯВНО УСТАНАВЛИВАЕМ backgroundColor В NIL ДЛЯ ОТСУТСТВИЯ ЗАЛИВКИ
 				backgroundColor = nil
 			}
 
 			rowData = append(rowData, cellValue)
 
-			// Добавляем запрос на форматирование только если нужна заливка
-			if backgroundColor != nil {
-				formatRequests = append(formatRequests, &sheets.Request{
-					RepeatCell: &sheets.RepeatCellRequest{
-						Range: &sheets.GridRange{
-							SheetId:          sheetId,
-							StartRowIndex:    int64(rowIndex + 3),
-							EndRowIndex:      int64(rowIndex + 4),
-							StartColumnIndex: int64(colIndex + 1),
-							EndColumnIndex:   int64(colIndex + 2),
-						},
-						Cell: &sheets.CellData{
-							UserEnteredFormat: &sheets.CellFormat{
-								BackgroundColor:   backgroundColor,
-								VerticalAlignment: "TOP",
-								WrapStrategy:      "WRAP",
-							},
-						},
-						Fields: "userEnteredFormat(backgroundColor,verticalAlignment,wrapStrategy)",
-					},
-				})
-			} else {
-				// ДЛЯ ЯЧЕЕК БЕЗ ЗАЛИВКИ ЯВНО УСТАНАВЛИВАЕМ БЕЛЫЙ ЦВЕТ
-				formatRequests = append(formatRequests, &sheets.Request{
-					RepeatCell: &sheets.RepeatCellRequest{
-						Range: &sheets.GridRange{
-							SheetId:          sheetId,
-							StartRowIndex:    int64(rowIndex + 3),
-							EndRowIndex:      int64(rowIndex + 4),
-							StartColumnIndex: int64(colIndex + 1),
-							EndColumnIndex:   int64(colIndex + 2),
-						},
-						Cell: &sheets.CellData{
-							UserEnteredFormat: &sheets.CellFormat{
-								BackgroundColor: &sheets.Color{
-									Red:   1.0, // Белый цвет
-									Green: 1.0,
-									Blue:  1.0,
-								},
-								VerticalAlignment: "TOP",
-								WrapStrategy:      "WRAP",
-							},
-						},
-						Fields: "userEnteredFormat(backgroundColor,verticalAlignment,wrapStrategy)",
-					},
-				})
+			// Форматирование ячейки
+			cellFormat := &sheets.CellData{
+				UserEnteredFormat: &sheets.CellFormat{
+					VerticalAlignment: "TOP",
+					WrapStrategy:      "WRAP",
+				},
 			}
 
+			if backgroundColor != nil {
+				cellFormat.UserEnteredFormat.BackgroundColor = backgroundColor
+			} else {
+				// Явно устанавливаем белый фон для отсутствия заливки
+				cellFormat.UserEnteredFormat.BackgroundColor = &sheets.Color{
+					Red:   1.0,
+					Green: 1.0,
+					Blue:  1.0,
+				}
+			}
+
+			formatRequests = append(formatRequests, &sheets.Request{
+				RepeatCell: &sheets.RepeatCellRequest{
+					Range: &sheets.GridRange{
+						SheetId:          sheetId,
+						StartRowIndex:    int64(rowIndex + 3),
+						EndRowIndex:      int64(rowIndex + 4),
+						StartColumnIndex: int64(colIndex + 1),
+						EndColumnIndex:   int64(colIndex + 2),
+					},
+					Cell:   cellFormat,
+					Fields: "userEnteredFormat(backgroundColor,verticalAlignment,wrapStrategy)",
+				},
+			})
+
 			currentDate = currentDate.AddDate(0, 0, 1)
+		}
+		data = append(data, rowData)
+	}
+
+	// Если нет аппаратов, добавляем строку с сообщением
+	if len(items) == 0 {
+		rowData := []interface{}{"Нет доступных аппаратов"}
+		for i := 0; i < dateCols; i++ {
+			rowData = append(rowData, "")
 		}
 		data = append(data, rowData)
 	}
@@ -480,7 +486,7 @@ func (s *SheetsService) UpdateScheduleSheet(startDate, endDate time.Time, dailyB
 		return fmt.Errorf("unable to update schedule sheet: %v", err)
 	}
 
-	// Применяем все форматирования
+	// Применяем все форматирования только если они есть
 	if len(formatRequests) > 0 {
 		batchUpdateRequest := &sheets.BatchUpdateSpreadsheetRequest{
 			Requests: formatRequests,
@@ -493,7 +499,7 @@ func (s *SheetsService) UpdateScheduleSheet(startDate, endDate time.Time, dailyB
 	}
 
 	// Настраиваем ширину колонок
-	return s.adjustColumnWidths(sheetId, len(dateHeaders))
+	return s.adjustColumnWidths(sheetId, dateCols)
 }
 
 // filterActiveBookings фильтрует активные заявки (исключает отмененные)
@@ -508,14 +514,18 @@ func (s *SheetsService) filterActiveBookings(bookings []models.Booking) []models
 }
 
 // adjustColumnWidths настраивает ширину колонок
-func (s *SheetsService) adjustColumnWidths(sheetId int64, dateCount int) error {
-	requests := []*sheets.Request{}
+func (s *SheetsService) adjustColumnWidths(sheetId int64, dateCols int) error {
+	if dateCols <= 0 {
+		dateCols = 1 // Минимум одна колонка
+	}
 
-	// Колонка A - названия аппаратов (ширина 200px)
+	var requests []*sheets.Request
+
+	// Ширина для названий аппаратов
 	requests = append(requests, &sheets.Request{
 		UpdateDimensionProperties: &sheets.UpdateDimensionPropertiesRequest{
 			Range: &sheets.DimensionRange{
-				SheetId:    sheetId, // ИСПРАВЛЕНО
+				SheetId:    sheetId,
 				Dimension:  "COLUMNS",
 				StartIndex: 0,
 				EndIndex:   1,
@@ -527,15 +537,15 @@ func (s *SheetsService) adjustColumnWidths(sheetId int64, dateCount int) error {
 		},
 	})
 
-	// Колонки с датами (ширина 150px)
-	if dateCount > 0 {
+	// Ширина для колонок с датами
+	for i := 1; i <= dateCols && i < 100; i++ { // Ограничим 100 колонками
 		requests = append(requests, &sheets.Request{
 			UpdateDimensionProperties: &sheets.UpdateDimensionPropertiesRequest{
 				Range: &sheets.DimensionRange{
-					SheetId:    sheetId, // ИСПРАВЛЕНО
+					SheetId:    sheetId,
 					Dimension:  "COLUMNS",
-					StartIndex: 1,
-					EndIndex:   int64(1 + dateCount),
+					StartIndex: int64(i),
+					EndIndex:   int64(i + 1),
 				},
 				Properties: &sheets.DimensionProperties{
 					PixelSize: 150,
@@ -551,7 +561,9 @@ func (s *SheetsService) adjustColumnWidths(sheetId int64, dateCount int) error {
 		}
 
 		_, err := s.service.Spreadsheets.BatchUpdate(s.bookingsSheetID, batchUpdateRequest).Do()
-		return err
+		if err != nil {
+			return fmt.Errorf("unable to adjust column widths: %v", err)
+		}
 	}
 
 	return nil
