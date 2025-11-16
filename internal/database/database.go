@@ -194,7 +194,7 @@ func (db *DB) UpdateBookingComment(ctx context.Context, bookingID int64, comment
 // GetBooking возвращает бронирование по ID
 func (db *DB) GetBooking(ctx context.Context, id int64) (*models.Booking, error) {
 	query := `
-        SELECT id, user_id, user_name, user_nickname, phone, item_id, item_name, date, status, created_at, updated_at
+        SELECT id, user_id, user_name, user_nickname, phone, item_id, item_name, date, status, comment, created_at, updated_at
         FROM bookings WHERE id = ?
     `
 
@@ -209,6 +209,7 @@ func (db *DB) GetBooking(ctx context.Context, id int64) (*models.Booking, error)
 		&booking.ItemName,
 		&booking.Date,
 		&booking.Status,
+		&booking.Comment,
 		&booking.CreatedAt,
 		&booking.UpdatedAt,
 	)
@@ -231,7 +232,7 @@ func (db *DB) UpdateBookingStatus(ctx context.Context, id int64, status string) 
 // GetBookingsByDateRange возвращает бронирования за период
 func (db *DB) GetBookingsByDateRange(ctx context.Context, startDate, endDate time.Time) ([]models.Booking, error) {
 	query := `
-        SELECT id, user_id, user_name, phone, item_id, item_name, date, status, created_at
+        SELECT id, user_id, user_name, phone, item_id, item_name, date, status, comment, created_at
         FROM bookings 
         WHERE date(date) BETWEEN date(?) AND date(?)
         ORDER BY date, created_at
@@ -257,6 +258,7 @@ func (db *DB) GetBookingsByDateRange(ctx context.Context, startDate, endDate tim
 			&booking.ItemName,
 			&booking.Date,
 			&booking.Status,
+			&booking.Comment,
 			&booking.CreatedAt,
 		)
 		if err != nil {
@@ -310,7 +312,7 @@ func (db *DB) UpdateBookingItem(ctx context.Context, id int64, itemID int64, ite
 // GetUserBookings возвращает список всех бронирований пользователя
 func (db *DB) GetUserBookings(ctx context.Context, userID int64) ([]models.Booking, error) {
 	query := `
-        SELECT id, user_id, user_name, user_nickname, phone, item_id, item_name, date, status, created_at, updated_at
+        SELECT id, user_id, user_name, user_nickname, phone, item_id, item_name, date, status, comment, created_at, updated_at
         FROM bookings 
         WHERE user_id = ?
         ORDER BY created_at DESC
@@ -335,6 +337,7 @@ func (db *DB) GetUserBookings(ctx context.Context, userID int64) ([]models.Booki
 			&booking.ItemName,
 			&booking.Date,
 			&booking.Status,
+			&booking.Comment,
 			&booking.CreatedAt,
 			&booking.UpdatedAt,
 		)

@@ -338,6 +338,14 @@ func (s *SheetsService) UpdateScheduleSheet(startDate, endDate time.Time, dailyB
 				}
 
 				cellValue += fmt.Sprintf("\nЗанято: %d/%d", bookedCount, item.TotalQuantity)
+				// Проверяем статусы активных заявок
+				hasUnconfirmed := false
+				for _, booking := range activeBookings {
+					if booking.Status == "pending" || booking.Status == "changed" {
+						hasUnconfirmed = true
+						break
+					}
+				}
 
 				// 1. Если все аппараты заняты - КРАСНЫЙ
 				if bookedCount >= int(item.TotalQuantity) {
@@ -346,16 +354,15 @@ func (s *SheetsService) UpdateScheduleSheet(startDate, endDate time.Time, dailyB
 						Green: 0.78,
 						Blue:  0.81,
 					}
-				} else {
-					// Проверяем статусы активных заявок
-					hasUnconfirmed := false
-					for _, booking := range activeBookings {
-						if booking.Status == "pending" || booking.Status == "changed" {
-							hasUnconfirmed = true
-							break
+
+					if hasUnconfirmed {
+						backgroundColor = &sheets.Color{
+							Red:   1.0,
+							Green: 0.92,
+							Blue:  0.61,
 						}
 					}
-
+				} else {
 					// 2. Если есть неподтвержденные заявки - ЖЕЛТЫЙ
 					if hasUnconfirmed {
 						backgroundColor = &sheets.Color{
