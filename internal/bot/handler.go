@@ -613,6 +613,8 @@ func (b *Bot) saveUser(update tgbotapi.Update) {
 	} else {
 		log.Printf("Пользователь сохранен: %s (ID: %d)", user.FirstName, user.ID)
 	}
+
+	b.SyncUsersToSheets()
 }
 
 // updateUserPhone обновляет номер телефона пользователя
