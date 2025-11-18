@@ -6,7 +6,7 @@ services:
       context: .
       dockerfile: Dockerfile
     container_name: booking-bot
-    restart: "no"  # Измените на "no" для диагностики
+    restart: "on-failure"  # Измените на "no" для диагностики
     env_file:
       - .env
     environment:
