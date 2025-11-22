@@ -313,6 +313,9 @@ func (b *Bot) handleCallbackQuery(update tgbotapi.Update) {
 		}
 		b.handleMainMenu(tempUpdate)
 
+	case strings.HasPrefix(data, "tel:"):
+		b.handleCallButton(update)
+
 	default:
 		log.Printf("Unknown callback data: %s", callback.Data)
 	}

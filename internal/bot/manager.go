@@ -1025,6 +1025,9 @@ func (b *Bot) notifyManagers(booking models.Booking) {
 				tgbotapi.NewInlineKeyboardButtonData("✏️ Изменить аппарат", fmt.Sprintf("change_item_%d", booking.ID)),
 				tgbotapi.NewInlineKeyboardButtonData("🔄 Предложить выбрать другую дату", fmt.Sprintf("reschedule_%d", booking.ID)),
 			),
+			tgbotapi.NewInlineKeyboardRow(
+				tgbotapi.NewInlineKeyboardButtonData("📞 Позвонить", fmt.Sprintf("tel:%s", booking.Phone)),
+			),
 		)
 		msg.ReplyMarkup = &keyboard
 
@@ -1089,4 +1092,73 @@ func (b *Bot) editManagerItemsPage(update tgbotapi.Update, page int) {
 
 	b.bot.Send(editMsg)
 	b.bot.Send(tgbotapi.NewCallback(callback.ID, ""))
+}
+
+// handleCallButton обработка нажатия кнопки "Позвонить"
+func (b *Bot) handleCallButton(update tgbotapi.Update) {
+	callback := update.CallbackQuery
+	if callback == nil {
+		return
+	}
+
+	// Извлекаем номер телефона из callback data
+	phone := strings.TrimPrefix(callback.Data, "tel:")
+
+	if phone == "" {
+		b.sendMessage(callback.Message.Chat.ID, "❌ Номер телефона не найден")
+		return
+	}
+
+	// Форматируем номер для отображения
+	formattedPhone := b.formatPhoneForDisplay(phone)
+
+	// Создаем сообщение с номером телефона
+	message := fmt.Sprintf("📞 Номер телефона: `%s`\n\n", formattedPhone)
+	message += "Вы можете:\n"
+	message += "• 📱 Позвонить по этому номеру\n"
+	message += "• 💬 Написать в WhatsApp\n"
+	message += "• ✉️ Отправить SMS"
+
+	msg := tgbotapi.NewMessage(callback.Message.Chat.ID, message)
+	msg.ParseMode = "Markdown"
+
+	// Создаем клавиатуру с быстрыми действиями
+	keyboard := tgbotapi.NewInlineKeyboardMarkup(
+		tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonURL("📞 Позвонить", fmt.Sprintf("tel:%s", phone)),
+			tgbotapi.NewInlineKeyboardButtonURL("💬 WhatsApp", fmt.Sprintf("https://wa.me/%s", strings.TrimPrefix(phone, "+"))),
+		),
+		tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonURL("✉️ SMS", fmt.Sprintf("sms:%s", phone)),
+			tgbotapi.NewInlineKeyboardButtonData("⬅️ Назад", "back_to_booking_details"),
+		),
+	)
+	msg.ReplyMarkup = &keyboard
+
+	b.bot.Send(msg)
+}
+
+// formatPhoneForDisplay форматирует номер телефона для красивого отображения
+func (b *Bot) formatPhoneForDisplay(phone string) string {
+	// Убираем все нецифровые символы
+	cleaned := ""
+	for _, char := range phone {
+		if char >= '0' && char <= '9' {
+			cleaned += string(char)
+		}
+	}
+
+	// Форматируем в зависимости от длины
+	if len(cleaned) == 11 && cleaned[0] == '7' {
+		// Российский номер: +7 (XXX) XXX-XX-XX
+		return fmt.Sprintf("+7 (%s) %s-%s-%s",
+			cleaned[1:4], cleaned[4:7], cleaned[7:9], cleaned[9:])
+	} else if len(cleaned) == 10 {
+		// Номер без кода страны: (XXX) XXX-XX-XX
+		return fmt.Sprintf("(%s) %s-%s-%s",
+			cleaned[0:3], cleaned[3:6], cleaned[6:8], cleaned[8:])
+	}
+
+	// Возвращаем исходный номер, если форматирование не применимо
+	return phone
 }
