@@ -932,7 +932,7 @@ func (b *Bot) confirmBooking(booking *models.Booking, managerChatID int64) {
 
 	// Уведомляем пользователя
 	userMsg := tgbotapi.NewMessage(booking.UserID,
-		fmt.Sprintf("✅ Ваша заявка на %s подтверждена! Ждем вас %s.",
+		fmt.Sprintf("✅ Ваша заявка на %s %s подтверждена!",
 			booking.ItemName, booking.Date.Format("02.01.2006")))
 	b.bot.Send(userMsg)
 

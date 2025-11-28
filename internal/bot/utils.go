@@ -210,12 +210,9 @@ func (b *Bot) handleNameRequest(update tgbotapi.Update) {
 	b.debugState(update.Message.From.ID, "handleNameRequest START")
 
 	msg := tgbotapi.NewMessage(update.Message.Chat.ID,
-		"Пожалуйста, введите ваше имя для заявки:")
+		"Пожалуйста, введите ваше ФИО для заявки:")
 
 	keyboard := tgbotapi.NewReplyKeyboard(
-		tgbotapi.NewKeyboardButtonRow(
-			tgbotapi.NewKeyboardButton("👤 Использовать имя из Telegram"),
-		),
 		tgbotapi.NewKeyboardButtonRow(
 			tgbotapi.NewKeyboardButton("📞 Контакты менеджеров"),
 			tgbotapi.NewKeyboardButton("❌ Отмена"),
@@ -340,7 +337,7 @@ func (b *Bot) finalizeBooking(update tgbotapi.Update) {
 	}
 
 	msg := tgbotapi.NewMessage(update.Message.Chat.ID,
-		fmt.Sprintf("✅ Ваша заявка #%d на позицию %s успешно создана!\nМенеджер свяжется с вами для подтверждения.", booking.ID, booking.ItemName))
+		fmt.Sprintf("⏳ Ваша заявка #%d на позицию %s успешно создана. \nОжидайте подтверждения.", booking.ID, booking.ItemName))
 
 	go func() {
 		time.Sleep(1 * time.Second) // Небольшая задержка для завершения операции в БД
