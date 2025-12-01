@@ -341,7 +341,7 @@ func (b *Bot) finalizeBooking(update tgbotapi.Update) {
 	go func() {
 		time.Sleep(1 * time.Second) // Небольшая задержка для завершения операции в БД
 		b.SyncBookingsToSheets()
-		b.SyncScheduleToSheets()
+		// b.SyncScheduleToSheets()
 	}()
 
 	// Очищаем состояние
@@ -772,6 +772,11 @@ func (b *Bot) handlePhoneReceived(update tgbotapi.Update, phone string) {
 		return
 	}
 
+	name, ok := state.TempData["user_name"].(string)
+	if !ok {
+		name = ""
+	}
+
 	msg := tgbotapi.NewMessage(update.Message.Chat.ID,
 		fmt.Sprintf(`📋 Подтверждение заявки:
 
@@ -781,7 +786,7 @@ func (b *Bot) handlePhoneReceived(update tgbotapi.Update, phone string) {
 📱 Телефон: %s`,
 			selectedItem.Name,
 			date.Format("02.01.2006"),
-			update.Message.From.FirstName+" "+update.Message.From.LastName,
+			name,
 			normalizedPhone))
 
 	// keyboard := tgbotapi.NewReplyKeyboard(

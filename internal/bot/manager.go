@@ -885,17 +885,18 @@ func (b *Bot) SyncScheduleToSheets() {
 		var googleBookings []models.Booking
 		for _, booking := range bookings {
 			googleBookings = append(googleBookings, models.Booking{
-				ID:        booking.ID,
-				UserID:    booking.UserID,
-				ItemID:    booking.ItemID,
-				Date:      booking.Date,
-				Status:    booking.Status,
-				Comment:   booking.Comment,
-				UserName:  booking.UserName,
-				Phone:     booking.Phone,
-				ItemName:  booking.ItemName,
-				CreatedAt: booking.CreatedAt,
-				UpdatedAt: booking.UpdatedAt,
+				ID:           booking.ID,
+				UserID:       booking.UserID,
+				ItemID:       booking.ItemID,
+				Date:         booking.Date,
+				Status:       booking.Status,
+				Comment:      booking.Comment,
+				UserName:     booking.UserName,
+				UserNickname: booking.UserNickname,
+				Phone:        booking.Phone,
+				ItemName:     booking.ItemName,
+				CreatedAt:    booking.CreatedAt,
+				UpdatedAt:    booking.UpdatedAt,
 			})
 		}
 		googleDailyBookings[date] = googleBookings
