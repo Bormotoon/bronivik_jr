@@ -13,7 +13,6 @@ import (
 )
 
 // exportToExcel создает Excel файл с данными о бронированиях
-// exportToExcel создает Excel файл с данными о бронированиях
 func (b *Bot) exportToExcel(startDate, endDate time.Time) (string, error) {
 	// Создаем папку для экспорта, если не существует
 	if err := os.MkdirAll(b.config.Exports.Path, 0755); err != nil {

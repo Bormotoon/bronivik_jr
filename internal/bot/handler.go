@@ -73,7 +73,6 @@ func (b *Bot) Start() {
 			continue
 		}
 
-		// Проверка черного списка
 		if b.isBlacklisted(update.Message.From.ID) {
 			continue
 		}
@@ -86,12 +85,10 @@ func (b *Bot) handleMessage(update tgbotapi.Update) {
 	userID := update.Message.From.ID
 	text := update.Message.Text
 
-	// Проверка черного списка
 	if b.isBlacklisted(userID) {
 		return
 	}
 
-	// Проверка на менеджера
 	if b.isManager(userID) {
 		handled := b.handleManagerCommand(update)
 		if handled {
@@ -316,6 +313,32 @@ func (b *Bot) handleCallbackQuery(update tgbotapi.Update) {
 					b.sendManagerBookingDetail(callback.Message.Chat.ID, booking)
 				}
 			}
+		}
+
+	case data == "start_the_order":
+		b.handleSelectItem(update)
+
+	case data == "start_the_order_item":
+		state := b.getUserState(callback.From.ID)
+		if state != nil && state.TempData["selected_item"] != nil {
+			selectedItem := state.TempData["selected_item"].(models.Item)
+			// Сохраняем выбранный аппарат для создания заявки
+			tempData := map[string]interface{}{
+				"selected_item": selectedItem,
+			}
+			b.setUserState(callback.From.ID, StateWaitingDate, tempData)
+
+			msg := tgbotapi.NewMessage(callback.Message.Chat.ID,
+				fmt.Sprintf("Вы выбрали: %s\n\nВведите дату бронирования в формате ДД.ММ.ГГГГ (например, 25.12.2024):",
+					selectedItem.Name))
+
+			keyboard := tgbotapi.NewReplyKeyboard(
+				tgbotapi.NewKeyboardButtonRow(
+					tgbotapi.NewKeyboardButton("⬅️ Назад"),
+				),
+			)
+			msg.ReplyMarkup = keyboard
+			b.bot.Send(msg)
 		}
 
 	default:

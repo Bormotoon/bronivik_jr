@@ -436,8 +436,29 @@ func (b *Bot) sendScheduleItemsPage(chatID, userID int64, page int) {
 }
 
 func (b *Bot) handleSelectItem(update tgbotapi.Update) {
-	chatID := update.Message.Chat.ID
-	userID := update.Message.From.ID
+	var chatID int64
+	var userID int64
+
+	// Определяем источник вызова
+	if update.Message != nil {
+		// Вызов из обычного сообщения
+		chatID = update.Message.Chat.ID
+		userID = update.Message.From.ID
+	} else if update.CallbackQuery != nil {
+		// Вызов из callback
+		chatID = update.CallbackQuery.Message.Chat.ID
+		userID = update.CallbackQuery.From.ID
+
+		// Отвечаем на callback (убираем "часики")
+		callbackConfig := tgbotapi.NewCallback(update.CallbackQuery.ID, "")
+		b.bot.Request(callbackConfig)
+	} else {
+		log.Printf("Error: cannot determine chatID and userID in handleSelectItem")
+		return
+	}
+
+	// Обновляем активность пользователя
+	b.updateUserActivity(userID)
 
 	// Сохраняем состояние
 	b.setUserState(userID, StateSelectItem, map[string]interface{}{
@@ -521,7 +542,17 @@ func (b *Bot) showAvailableItems(update tgbotapi.Update) {
 		message.WriteString("\n")
 	}
 
+	var keyboard [][]tgbotapi.InlineKeyboardButton
+
+	keyboard = append(keyboard, []tgbotapi.InlineKeyboardButton{
+		tgbotapi.NewInlineKeyboardButtonData("📋 СОЗДАТЬ ЗАЯВКУ", "start_the_order"),
+	})
+
+	markup := tgbotapi.NewInlineKeyboardMarkup(keyboard...)
+
 	msg := tgbotapi.NewMessage(update.Message.Chat.ID, message.String())
+	msg.ReplyMarkup = &markup
+
 	b.bot.Send(msg)
 }
 
@@ -562,7 +593,16 @@ func (b *Bot) showMonthScheduleForItem(update tgbotapi.Update) {
 	}
 	message.WriteString("```")
 
+	var keyboard [][]tgbotapi.InlineKeyboardButton
+
+	keyboard = append(keyboard, []tgbotapi.InlineKeyboardButton{
+		tgbotapi.NewInlineKeyboardButtonData("📋 СОЗДАТЬ ЗАЯВКУ НА ЭТОТ АППАРАТ", "start_the_order_item"),
+	})
+
+	markup := tgbotapi.NewInlineKeyboardMarkup(keyboard...)
+
 	msg := tgbotapi.NewMessage(update.Message.Chat.ID, message.String())
+	msg.ReplyMarkup = &markup
 	msg.ParseMode = "Markdown"
 	b.bot.Send(msg)
 }
