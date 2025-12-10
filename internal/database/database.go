@@ -232,9 +232,10 @@ func (db *DB) UpdateBookingStatus(ctx context.Context, id int64, status string) 
 // GetBookingsByDateRange возвращает бронирования за период
 func (db *DB) GetBookingsByDateRange(ctx context.Context, startDate, endDate time.Time) ([]models.Booking, error) {
 	query := `
-        SELECT id, user_id, user_name, user_nickname, phone, item_id, item_name, date, status, comment, created_at, updated_at
+        SELECT id, user_id, user_name, user_nickname, phone, item_id, item_name, 
+               date, status, comment, created_at, updated_at
         FROM bookings 
-        WHERE date(date) BETWEEN date(?) AND date(?)
+        WHERE strftime('%Y-%m-%d', date) BETWEEN ? AND ?
         ORDER BY date, created_at
     `
 
@@ -242,11 +243,13 @@ func (db *DB) GetBookingsByDateRange(ctx context.Context, startDate, endDate tim
 		startDate.Format("2006-01-02"),
 		endDate.Format("2006-01-02"))
 	if err != nil {
+		log.Printf("Ошибка в GetBookingsByDateRange: %v", err)
 		return nil, err
 	}
 	defer rows.Close()
 
 	var bookings []models.Booking
+	count := 0
 	for rows.Next() {
 		var booking models.Booking
 		err := rows.Scan(
@@ -264,15 +267,21 @@ func (db *DB) GetBookingsByDateRange(ctx context.Context, startDate, endDate tim
 			&booking.UpdatedAt,
 		)
 		if err != nil {
+			log.Printf("Ошибка при сканировании строки %d: %v", count, err)
 			return nil, err
 		}
 		bookings = append(bookings, booking)
+		count++
 	}
 
+	log.Printf("Прочитано %d заявок", count)
+
 	if err = rows.Err(); err != nil {
+		log.Printf("Ошибка rows.Err(): %v", err)
 		return nil, err
 	}
 
+	log.Printf("Возвращаем %d заявок", len(bookings))
 	return bookings, nil
 }
 

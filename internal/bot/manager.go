@@ -539,8 +539,10 @@ func (b *Bot) showManagerBookings(update tgbotapi.Update) {
 		return
 	}
 
+	log.Printf("Получено %d заявок из БД", len(bookings))
+
 	if bookings == nil {
-		log.Printf("Error getting bookings: %v", err)
+		log.Printf("Bookings is nil")
 		b.sendMessage(update.Message.Chat.ID, "Ошибка при получении заявок bookings")
 		return
 	}
