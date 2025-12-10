@@ -232,7 +232,7 @@ func (db *DB) UpdateBookingStatus(ctx context.Context, id int64, status string) 
 // GetBookingsByDateRange возвращает бронирования за период
 func (db *DB) GetBookingsByDateRange(ctx context.Context, startDate, endDate time.Time) ([]models.Booking, error) {
 	query := `
-        SELECT id, user_id, user_name, phone, item_id, item_name, date, status, comment, created_at
+        SELECT id, user_id, user_name, user_nickname, phone, item_id, item_name, date, status, comment, created_at, updated_at
         FROM bookings 
         WHERE date(date) BETWEEN date(?) AND date(?)
         ORDER BY date, created_at
@@ -253,6 +253,7 @@ func (db *DB) GetBookingsByDateRange(ctx context.Context, startDate, endDate tim
 			&booking.ID,
 			&booking.UserID,
 			&booking.UserName,
+			&booking.UserNickname,
 			&booking.Phone,
 			&booking.ItemID,
 			&booking.ItemName,
@@ -260,6 +261,7 @@ func (db *DB) GetBookingsByDateRange(ctx context.Context, startDate, endDate tim
 			&booking.Status,
 			&booking.Comment,
 			&booking.CreatedAt,
+			&booking.UpdatedAt,
 		)
 		if err != nil {
 			return nil, err

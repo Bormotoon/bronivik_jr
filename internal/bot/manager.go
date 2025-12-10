@@ -524,22 +524,24 @@ func (b *Bot) createManagerBookings(update tgbotapi.Update, state *models.UserSt
 
 // showManagerBookings показывает все заявки менеджеру
 func (b *Bot) showManagerBookings(update tgbotapi.Update) {
-	log.Printf("Info: showManagerBookings START")
-
 	if !b.isManager(update.Message.From.ID) {
-		log.Printf("Info: showManagerBookings not a manger")
-
 		return
 	}
 
 	// Получаем все заявки за период: один месяц назад и два месяца вперед
-	startDate := time.Now().AddDate(0, -1, 0) // 1 месяц назад
-	endDate := time.Now().AddDate(0, 2, 0)    // 2 месяца вперед
+	startDate := time.Now().AddDate(0, 0, 7) // 7 дней месяц назад
+	endDate := time.Now().AddDate(0, 2, 0)   // 2 месяца вперед
 
 	bookings, err := b.db.GetBookingsByDateRange(context.Background(), startDate, endDate)
 	if err != nil {
 		log.Printf("Error getting bookings: %v", err)
 		b.sendMessage(update.Message.Chat.ID, "Ошибка при получении заявок")
+		return
+	}
+
+	if bookings == nil {
+		log.Printf("Error getting bookings: %v", err)
+		b.sendMessage(update.Message.Chat.ID, "Ошибка при получении заявок bookings")
 		return
 	}
 
@@ -554,6 +556,8 @@ func (b *Bot) showManagerBookings(update tgbotapi.Update) {
 		case "cancelled":
 			statusEmoji = "❌"
 		case "changed":
+			statusEmoji = "🔄"
+		case "rescheduled":
 			statusEmoji = "🔄"
 		case "completed":
 			statusEmoji = "🏁"
