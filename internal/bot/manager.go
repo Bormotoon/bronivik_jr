@@ -529,8 +529,8 @@ func (b *Bot) showManagerBookings(update tgbotapi.Update) {
 	}
 
 	// Получаем все заявки за период: один месяц назад и два месяца вперед
-	startDate := time.Now().AddDate(0, 0, 7) // 7 дней месяц назад
-	endDate := time.Now().AddDate(0, 2, 0)   // 2 месяца вперед
+	startDate := time.Now().AddDate(0, 0, -7) // 7 дней месяц назад
+	endDate := time.Now().AddDate(0, 2, 0)    // 2 месяца вперед
 
 	bookings, err := b.db.GetBookingsByDateRange(context.Background(), startDate, endDate)
 	if err != nil {
